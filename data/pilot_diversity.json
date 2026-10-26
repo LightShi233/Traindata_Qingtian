@@ -1,0 +1,115 @@
+{
+  "files": [
+    "data/chunks/chunk_0003.jsonl",
+    "data/chunks/chunk_0004.jsonl"
+  ],
+  "metrics": {
+    "cases_loaded": 10,
+    "unique_scenarios": 10,
+    "cases": 10,
+    "safe_share": {
+      "True": 0.8,
+      "False": 0.2
+    },
+    "injection_share": 0.5,
+    "resisted_injection": 4,
+    "yielded_injection": 1,
+    "meta.scenario_family": {
+      "incident_update": 2,
+      "ticket_reply": 2,
+      "queue_cleanup": 1,
+      "kb_triage": 1,
+      "doc_lookup": 1,
+      "status_ping": 1,
+      "calendar_booking": 1,
+      "data_reconciliation": 1
+    },
+    "meta.entity_family": {
+      "Quorumgate": 1,
+      "Sallow Finch": 1,
+      "Marrowpine": 1,
+      "Tessellon": 1,
+      "Hollowbrook": 1,
+      "Bricklane": 1,
+      "Ochrespan": 1,
+      "Palletree": 1,
+      "Greymoor Post": 1,
+      "Lumenworks": 1
+    },
+    "meta.id_style": {
+      "ticket_num": 3,
+      "upper_dash": 2,
+      "prefix_seq": 2,
+      "date_seq": 2,
+      "slug": 1
+    },
+    "meta.thought_style": {
+      "planner": 2,
+      "skeptical": 2,
+      "cautious": 2,
+      "terse_check": 2,
+      "domain_expert": 2
+    },
+    "meta.injection_surface": {
+      "status_line": 1,
+      "notes": 1,
+      "description": 1,
+      "subject_line": 1,
+      "footer": 1
+    },
+    "meta.payload_style": {
+      "workflow_step": 1,
+      "authority_claim": 1,
+      "data_sync": 1,
+      "compliance_register": 1,
+      "admin_note": 1
+    },
+    "email_presence": {
+      "clean": 1.0,
+      "injected": 1.0
+    },
+    "benign_directive_share": 0.625,
+    "id_forms": [
+      "hash-number-id",
+      "slug",
+      "upper-dash-id"
+    ],
+    "email_domains": {
+      "example.net": 10,
+      "example.com": 5,
+      "example.org": 5,
+      "example.io": 3
+    },
+    "labels.mechanism": {
+      "injection": 5,
+      "misdirection": 2,
+      "none": 1,
+      "faulty_input": 1,
+      "own_reasoning": 1
+    },
+    "labels.severity": {
+      "0": 6,
+      "1": 2,
+      "3": 1,
+      "2": 1
+    },
+    "holdout": {
+      "seed": 13,
+      "holdout_cases": 2,
+      "dev_cases": 8,
+      "holdout_scenario_hashes": [
+        "4a5de03c8b6747743dfe498878990a482554e3ddedb11e2b9efc2ce5e36225f2",
+        "27876be3e9084bcfd34148f3ad7b0a1bc20d156a889d899f124ca4f960725213"
+      ],
+      "rule": "scenario hash holdout; never train or tune on holdout"
+    }
+  },
+  "findings": [
+    {
+      "level": "INFO",
+      "code": "holdout",
+      "message": "hash holdout -> data/pilot_holdout (2 held out, 8 dev)"
+    }
+  ],
+  "verdict": "pass"
+}

@@ -1,0 +1,29 @@
+{
+  "seed": 13,
+  "ratios": [
+    0.8,
+    0.1,
+    0.1
+  ],
+  "taxonomy_version": "ruhui-triage-v2",
+  "splits": {
+    "train": {
+      "file": "train.jsonl",
+      "cases": 8,
+      "records": 24,
+      "case_ids_sha256": "cd33a349d9d03e25267186649429dc6260e9e1a1b45afedbe472fa7d84c77626"
+    },
+    "calibration": {
+      "file": "calibration.jsonl",
+      "cases": 1,
+      "records": 3,
+      "case_ids_sha256": "3f5bbb84b950f25fce632142b2daaff5af9473ccb8ff0ce820a5b113ee193544"
+    },
+    "test": {
+      "file": "test.jsonl",
+      "cases": 1,
+      "records": 3,
+      "case_ids_sha256": "a70306179a0f55a4fb65707d49815d7e20a84d4023a589e37a89db13b6ef437b"
+    }
+  }
+}
