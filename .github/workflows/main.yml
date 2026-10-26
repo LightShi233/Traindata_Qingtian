@@ -1,0 +1,38 @@
+name: TrainData Generation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  traindata-gen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Configure Git committer
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run OpenCode
+        uses: anomalyco/opencode/github@latest
+        env:
+          AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: agnes/agnes-3-flash
+          use_github_token: true
+          prompt: |
+            安装并使用 ./traindata skill 为Ruhui编写训练数据。
+            要求：
+            1. 严格遵循 traindata skill 中的模板与流程
+            2. 产出为 jsonl，写入 ./data 目录
+            3. 完成后提交，开一个 PR 标题前缀为 [traindata_add]
+            4. 绝对严禁私自把你制作的样本与文件夹中其他样本合并
+            5. 绝对严禁一次产出超过10个样本，但使用子代理，并且有相应验证时本规则例外
