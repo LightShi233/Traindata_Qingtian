@@ -15,7 +15,9 @@
                                                                                               }
                                                                                                     }
                                                                                                         }
-                                                                                                          }
+                                                                                                          },
+  "permission": "allow"
+
 
 }
                                                                                                           
