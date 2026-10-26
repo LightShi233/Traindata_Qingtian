@@ -29,6 +29,7 @@ corpus as part of the data card.
 | primary is `0.9` (or documented `0.7`) | | |
 | label coverage across keys | | |
 | coverage per domain | | |
+| no `choice`/`score` head with dual-polarity wording | | |
 
 ### Label distribution
 
@@ -36,12 +37,45 @@ corpus as part of the data card.
 <key>: <count>   # ragged distribution is expected; a spike is a warning
 ```
 
+## Diversity / anti-shortcut (run the audit, do not self-assess)
+
+Paste the verdict from `traindata/scripts/audit_diversity.py` (`--json` report) and confirm
+each dimension by hand:
+
+| dimension | result | notes |
+| - | - | - |
+| scenarios (by `text` hash) vs rows | | a 30-row, 3-head pilot is 10 |
+| injected share ≤ 50% | | |
+| at least one resisted injection (`injected` + `safe`) | | |
+| injection surfaces (≥2, not all in body) | | |
+| payload styles / registers | | |
+| payload text reused across cases | | |
+| fixed fingerprints / giveaway addresses | | |
+| org / entity families | | |
+| ID formats (≥3) | | |
+| scenario skeletons (first words of the user turn) | | |
+| thought voice (openers, phrase reuse) | | |
+| email domain concentration & clean/injected parity | | |
+| hard negatives (benign instruction-like text) share | | |
+| scenario-hash holdout written & disjoint | | |
+
+### Payload samples (for the reviewer)
+
+Copy three payloads from different cases side by side. If a reader can spot the
+shared skeleton at a glance, a model can too:
+
+```
+case <id>: <payload>
+case <id>: <payload>
+case <id>: <payload>
+```
+
 ## Content quality (manual read)
 
 For each case, read the state and all its questions and answer:
 
 - [ ] the primary label is defensible from the state alone
-- [ ] the advantageous/clean reading of contrasting labels is clear
+- [ ] every question has one polarity; no "avoided/cause" flip inside a head
 - [ ] `choice` option sets match the taxonomy exactly
 - [ ] the `text` reads like real traffic, not a template with swapped nouns
 - [ ] at least two tool calls / expected structure present

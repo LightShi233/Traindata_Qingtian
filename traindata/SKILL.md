@@ -1,12 +1,12 @@
 ---
 name: traindata
-description: Generate large, validated soft-label (.jsonl) training data for a ruhui-style non-autoregressive decision model, covering noul/choice/score question types with 0.9/spread soft distributions. Use when asked to synthesize, expand, clean, or validate soft-label training data, build a taxonomy of questions for a text-classification/decision dataset, create a held-out test set, or check generated data for label collapse, duplicate/near-duplicate leakage, or schema errors.
+description: Generate large, validated soft-label (.jsonl) training data for a ruhui-style non-autoregressive decision model, covering noul/choice/score question types with 0.9/spread soft distributions. Use when asked to synthesize, expand, clean, or validate soft-label training data, build a taxonomy of questions for a text-classification/decision dataset, create a held-out test set, or check generated data for label collapse, duplicate/near-duplicate leakage, schema errors, surface-fingerprint shortcut learning, diversity collapse, or dual-polarity question wording.
 license: See LICENSE in the parent repository
 compatibility: Requires Python 3.9+ (standard library only). No network access required.
 allowed-tools: Read Write Edit Glob Grep Bash(python3:*) Bash(python:*)
 metadata:
   author: ruhui-data
-  version: "1.0"
+  version: "1.1"
 ---
 
 # Generating soft-label training data
@@ -24,6 +24,12 @@ are rejected unless the corpus is explicitly justified.
 Records of one case share `text`, `source_hash`, and `source_index`; that is not
 a duplicate. A duplicate is the same `source_hash` appearing under two different
 case ids.
+
+Count **scenarios**, not rows. One case = one independent scenario no matter how
+many heads it has, so a 30-record pilot can be 10 scenarios. Diversity and
+holdout are computed per scenario (`text` hash), and a schema-valid corpus can
+still teach a surface shortcut — see `references/anti-shortcut.md`, which is part
+of the contract, not optional advice.
 
 ## When to use this skill
 
@@ -46,7 +52,7 @@ case ids.
 ## Core workflow
 
 Follow these phases in order. Do not skip Phase 3. Do not start large-scale
-generation before Phase 4 passes.
+generation before Phase 4 passes (schema validator **and** diversity audit).
 
 ### Phase 1 — Pin the contract
 
@@ -55,22 +61,40 @@ Confirm or decide, and write them down before generating:
 1. **Domain(s)** and the realistic `state` shape (string, object, or turn list).
 2. **Question taxonomy**: which `choice` option sets and `score` level sets are
    reused across cases. Reuse them; do not invent a new option set per record.
+   One head has one polarity — never "the mechanism it avoided" on clean cases.
 3. **Case ID scheme**, e.g. `safe_<6 digits>_<8 hex>` / `unsafe_<6 digits>_<8 hex>`
-   or `<domain>_<6 digits>_<8 hex>`. Must be globally unique.
+   or `<domain>_<6 digits>_<8 hex>`. Must be globally unique. Rotate ID formats
+   across scenarios (prefix, `#num`, UUID, slug, hex) — one format is a shortcut.
 4. **Soft-label rule** (default in this skill): primary label `0.9`, remaining
    probability mass `0.1` spread evenly. See `references/soft-labels.md`.
 5. **Target size**: number of cases and records. Typical: ≥2000 cases × 2–4
    questions = 4000–8000 records.
+6. **Diversity contract and the `meta` block.** Read
+   `references/anti-shortcut.md`. Decide the scenario families, org/entity
+   families, ID styles, thought voices, injection surfaces, payload registers,
+   and class ratios *before* generating, and require the generator to echo them
+   in a per-case `meta` object. Clean cases and injected cases are crossed
+   deliberately (resisted injections are mandatory); injected cases must not
+   exceed half the corpus.
 
 Read `references/soft-labels.md` for the full distribution rules and the
-deliberately-ambiguous case.
+deliberately-ambiguous case. Read `references/anti-shortcut.md` before writing
+any generation prompt; a schema-valid corpus that teaches a surface fingerprint
+is a failure.
 
-### Phase 2 — Write the schema and the validator first
+### Phase 2 — Confirm the schema gate before generating
 
-Write `scripts/validate_and_integrate.py` (copy and adapt
-`scripts/validate_and_integrate.py` in this skill) **before** generating anything.
-The validator is the spec made executable; if you cannot validate it, you cannot
-generate it correctly.
+The two gates ship **inside this skill** at `traindata/scripts/`. Run them
+in place; do not copy them to the repo root or anywhere else in the output tree.
+The generator's job is to produce data, a taxonomy, and a diversity plan — not a
+second copy of the tooling.
+
+- `traindata/scripts/validate_and_integrate.py` — schema and soft-label contract.
+- `traindata/scripts/audit_diversity.py` — the shortcut-learning gate.
+
+If a domain genuinely needs an extra check, add it to the taxonomy/config the
+tools already read, or extend the check in the skill script — never fork a
+loose copy into `./scripts`.
 
 The validator must check, per record:
 
@@ -90,40 +114,72 @@ The validator must check, per record:
   `--auto-leak` indexes `*soft*.jsonl` beside the output while excluding the
   files being checked, so a corpus never leaks against itself.
 
+The audit proves a record is not learnable by shortcut. It runs on
+case-form chunks, reads their `meta` block, and fails on fixed payload
+fingerprints, giveaway addresses, payload reuse, a single org/ID/voice/injection
+surface, injected-heavy corpora, reversed-polarity taxonomy wording, and a
+non-disjoint holdout. Both tools must exit 0 before a chunk is accepted. See
+`references/anti-shortcut.md` for every rule and default threshold.
+
 ### Phase 3 — Generate in chunks, validate each chunk
 
 Never generate the whole corpus in one shot. Loop per chunk:
 
 ```
-generate a chunk (e.g. 10 cases)
-  -> validate that chunk
-    -> if invalid, fix the data and retry (never weaken the validator)
-      -> only accepted records are appended
+generate a chunk from a written diversity plan (e.g. 10 cases)
+  -> validate that chunk (schema + soft labels)
+    -> audit that chunk (diversity + anti-shortcut)
+      -> if either fails, regenerate the chunk (never weaken a check)
+        -> only accepted chunks are kept
 ```
 
 Tips that make this work in practice:
 
 - Request a **structured** batch (a JSON array of cases) per call, with the
-  target counts and required label coverage spelled out in the prompt.
-- Generate a whole `case` at once (state + all its questions) so the shared
-  `text`/`source_hash`/`source_index` stay consistent.
-- Keep a per-chunk ID range so parallel workers cannot collide.
-- Reject and regenerate noisy records rather than patching them by hand.
+  target counts, the required label coverage, and the **diversity plan** spelled
+  out in the prompt.
+- Generate a whole `case` at once (state + all its questions + `meta`) so the
+  shared `text`/`source_hash`/`source_index` stay consistent.
+- Keep a per-chunk ID range so parallel workers cannot collide, and give each
+  worker its own slice of the rotation matrix so they do not converge on one
+  voice.
+- Reject and regenerate noisy records rather than patching them by hand. A
+  diversity failure means regenerate the whole chunk, not one row.
 
 See `references/generation-playbook.md` for prompting patterns, chunk sizing,
 parallelization, and the retry loop.
 
-### Phase 4 — Pilot and inspect before scaling
+### Phase 4 — Pilot, audit, and hold out before scaling
 
 Run 1–2 chunks, then inspect them by hand:
 
 - Does the primary label actually match the case, question by question?
-- Are `choice` option sets consistent across records?
+- Are `choice` option sets consistent across records, with **one polarity**?
 - Is every domain/qtype/label represented, or has something collapsed?
 - Is the text realistic and varied, or is it one template with words swapped?
+- Could you guess the label from a fixed phrase, an address, an org name, or an
+  ID format? If yes, the audit will fail it and so would the model.
+
+Run the diversity audit on the pilot and write a scenario-hash holdout:
+
+```bash
+python3 traindata/scripts/audit_diversity.py --chunks 'chunk_*.jsonl' \
+  --taxonomy taxonomy.json --require-injection --strict \
+  --holdout 2 --out-dir pilot_holdout --json pilot_diversity.json
+```
+
+`--holdout 2` on a 10-scenario pilot keeps 2 scenarios out of every later
+training/tuning run. Count scenarios by `text` hash: a 30-record, 10-scenario
+pilot is 10 scenarios, and the three heads of a case are not independent cases.
+
+**The pilot is a prompt gate, not training data.** Do not fine-tune a head on a
+small pilot alone: blending 30 rows into a model already trained on thousands,
+with the old epoch budget, is memorisation. If pilot rows ever enter training,
+keep them below ~5% of the blend (mixed with the base corpus, e.g. ATBench) with
+a reduced epoch budget, and say so in the data card.
 
 `assets/inspection-report.md` is a template for recording this. Fix the prompt or
-taxonomy, then scale out.
+taxonomy, then scale out. Never relax the audit to pass a chunk.
 
 ### Phase 5 — Integrate, then hold out
 
@@ -136,12 +192,16 @@ taxonomy, then scale out.
    training or for tuning the calibration temperature. If the user asks for a
    separate test set, generate it with its own disjoint ID range and confirm zero
    leakage against train/calibration.
+3. Keep the Phase 4 scenario-hash holdout disjoint from all three splits and from
+   any prompt iteration after the pilot is frozen.
 
 ### Phase 6 — Report
 
 Produce a data card: domain distribution, qtype distribution, label distribution,
-length stats, duplicate/leakage results, and known limitations. `--card` writes
-it directly from a validated run.
+length stats, duplicate/leakage results, the diversity-audit verdict and metrics
+(from `--json`), the holdout manifest, how the corpus was mixed (or not) with the
+base training data, and known limitations. `--card` writes the soft-label card
+directly from a validated run; attach the audit report next to it.
 
 ## Record format
 
@@ -175,6 +235,10 @@ Question-type specifics:
 One **case** produces multiple records that share `text`, `source_hash`, and
 `source_index`, differing only in `qtype`/`criteria`/`instruction`/`soft_label`.
 
+Case-form chunks carry one extra object, `meta`, holding the diversity plan (see
+`references/anti-shortcut.md`). It is **not** a training field: it is stripped when
+cases are expanded into records, and only the audit reads it.
+
 Full schema details, with edge cases and a worked example, are in
 `references/soft-labels.md` and `references/state-formats.md`.
 
@@ -184,48 +248,86 @@ Full schema details, with edge cases and a worked example, are in
    normalized. Ambiguity is expressed by lowering the primary below `0.9`, not by
    writing a hard 1.0.
 2. **`label` must equal the argmax** of `probabilities`.
-3. **Validate before you accumulate.** Unvalidated data is not data.
-4. **Test data is never training data.** Keep ID ranges and files disjoint.
-5. **No fabricated private data.** Use fictional names, `example.com` emails,
-   555-prefixed phone numbers, invented organizations. Do not emit real personal
-   data, real credentials, or directly executable attack code.
+3. **Validate, then audit, before you accumulate.** Unvalidated data is not data,
+   and schema-valid data that teaches a shortcut is worse than none. Both
+   `validate_and_integrate.py` and `audit_diversity.py` must exit 0.
+4. **Test data is never training data.** Keep ID ranges, files, and the scenario
+   holdout disjoint.
+5. **No fabricated private data.** Use fictional names, invented organizations,
+   and reserved/fictional domains. Do not emit real personal data, real
+   credentials, or directly executable attack code.
 6. **Keep the taxonomy stable.** Reuse option/level sets across records; a
    per-record invention defeats calibration.
 7. **Do not let labels collapse.** Both (or all) classes must carry meaningful
    volume and a clear semantic boundary, not just "the user asked for something
    bad".
+8. **No fixed payload fingerprints.** Do not reuse an injection phrase,
+   template, or opener across cases; do not use giveaway wording
+   (`AUTO-APPENDED`, `NOTE FOR BOT OPERATORS`) or addresses that name the intent
+   (`support-ext@`, `evil@`). Rotate position (body/subject/status/footer) and
+   register. The audit enforces this.
+9. **Poison must look ordinary, and clean cases must contain look-alikes.**
+   External-looking addresses and instruction-like text must appear in clean
+   cases too, or those surfaces become the label. Every case declares its plan in
+   `meta`; injected cases stay at or below half.
+10. **One head, one polarity.** No `choice`/`score` question may mean "the
+    failure" on violations and "the avoided failure" on clean cases. Ask what is
+    present in the input (with a `none` option) or split into two single-polarity
+    questions. `severity` rates the impact that occurred; clean ⇒ level 0.
+11. **Diversify the generator, not just the nouns.** Rotate scenario skeletons,
+    entity/org families, ID formats, thought voices, and generator personas
+    across chunks. One voice across the whole corpus is a shortcut.
+12. **A pilot is a prompt gate.** Hold out scenarios by hash (e.g. 2 of 10),
+    never tune on the holdout, and never fine-tune on the pilot alone. If pilot
+    rows are used, mix them below ~5% with the base corpus and reduce the epoch
+    budget.
 
 ## Reference files
 
+All paths below are inside the skill directory (`./traindata/`). The scripts are
+part of the skill: run them from `./traindata/scripts/` and never copy them into
+the repository root.
+
+- `references/anti-shortcut.md` — the diversity contract, `meta` schema, shortcut
+  fingerprints, hard negatives, dual-polarity fix, and pilot-mixing rules.
 - `references/soft-labels.md` — distribution rules, ambiguity, normalization, examples.
 - `references/state-formats.md` — string/object/turn-list states and conventions.
 - `references/generation-playbook.md` — chunking, prompting, parallelism, retries.
 - `references/taxonomy-design.md` — designing reusable option/level sets.
 - `assets/inspection-report.md` — template for Phase 4 review.
-- `scripts/validate_and_integrate.py` — runnable validator/integrator to adapt.
+- `scripts/validate_and_integrate.py` — runnable validator/integrator, used in place.
+- `scripts/audit_diversity.py` — runnable anti-shortcut / diversity gate.
 
 ## Quick checks
 
+Commands assume the working directory is the repository root and the skill is
+installed at `./traindata/`.
+
 ```bash
 # validate records
-python3 scripts/validate_and_integrate.py --check chunk_0001.jsonl --taxonomy taxonomy.json
+python3 traindata/scripts/validate_and_integrate.py --check chunk_0001.jsonl --taxonomy taxonomy.json
 
 # validate case-form chunks without writing anything
-python3 scripts/validate_and_integrate.py --check 'chunk_*.jsonl' \
+python3 traindata/scripts/validate_and_integrate.py --check 'chunk_*.jsonl' \
   --taxonomy taxonomy.json --expand --require-complete-cases
 
+# diversity audit: mandatory gate, must exit 0
+python3 traindata/scripts/audit_diversity.py --chunks 'chunk_*.jsonl' \
+  --taxonomy taxonomy.json --require-injection --strict \
+  --holdout 2 --out-dir pilot_holdout --json pilot_diversity.json
+
 # integrate (expand cases) and write a data card
-python3 scripts/validate_and_integrate.py --integrate --out all_soft.jsonl \
+python3 traindata/scripts/validate_and_integrate.py --integrate --out all_soft.jsonl \
   --taxonomy taxonomy.json --expand --card data-card.md
 
 # deterministic, case-disjoint train/calibration/test split
-python3 scripts/validate_and_integrate.py --split-dir split --chunks 'chunk_*.jsonl' \
+python3 traindata/scripts/validate_and_integrate.py --split-dir split --chunks 'chunk_*.jsonl' \
   --taxonomy taxonomy.json --expand
 
 # leakage check between splits (command is printed by --split-dir)
-python3 scripts/validate_and_integrate.py --check 'split/test.jsonl' \
+python3 traindata/scripts/validate_and_integrate.py --check 'split/test.jsonl' \
   --leak 'split/train.jsonl' --leak 'split/calibration.jsonl'
 ```
 
-The validator exits non-zero and prints every failure, so wire it into your loop
-and treat a non-zero exit as "the chunk does not exist yet".
+Both tools exit non-zero and print every failure, so wire them into your loop and
+treat a non-zero exit as "the chunk does not exist yet".

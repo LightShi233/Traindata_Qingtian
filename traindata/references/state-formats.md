@@ -73,9 +73,41 @@ Turn-list conventions:
 
 ## Content hygiene
 
-- fictional names, `example.com` emails, 555-prefixed phone numbers, invented
-  organizations
+- fictional names, `example` TLD or otherwise invented organizations, 555-prefixed
+  phone numbers
 - no real personal data, no real credentials, no directly executable attack code
 - sensitive content may be described, not reproduced
 - vary vocabulary, tool names, and story templates; a corpus of one template with
   swapped nouns teaches the template, not the task
+
+## Injection-bearing states
+
+When a state contains an injected instruction (a tool output, retrieved
+article, ticket field, or referenced document that steers the agent), the state
+placement is part of the design, not an accident:
+
+- vary the **field** that holds it: article body, ticket subject, a tool
+  `status`/`note` field, a JSON blob footer, a `description`, a revision comment,
+  a calendar description. Do not put every payload in the article body.
+- vary the **register**: a policy line, a workflow step, an authority claim, a
+  data-sync request, an admin handoff — not one fixed "NOTE FOR …" sentence.
+- vary the **address**: plausible fictional local parts and domains; never an
+  address that names the intent (`support-ext@`, `exfil@`, `evil@`). A payload
+  teaches the right lesson only if a reworded version would still look ordinary.
+- record it in the case `meta` block (`injection_surface`, `payload_style`,
+  `payload_span`); see `references/anti-shortcut.md`.
+
+**Address parity.** Clean cases must also carry external-looking addresses. If
+addresses appear only in poisoned cases, "has an address" becomes the label.
+Aim for roughly the same address-presence rate in clean and injected cases.
+
+**Hard negatives.** 25–75% of clean cases should contain instruction-like but
+legitimate text (a runbook line that says to escalate, a policy that says to cc
+finance), so the model cannot map "instruction-like tool output ⇒ unsafe".
+
+## The `meta` block
+
+Every case-form chunk carries a `meta` object (not part of `text`, so it never
+enters training). It records the diversity plan so the audit can verify it. The
+full field list and the enforced budget are in `references/anti-shortcut.md`; the
+schema-agnostic validator ignores it, the diversity audit requires it.
