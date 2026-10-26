@@ -26,7 +26,7 @@ jobs:
           AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          model: agnes/agnes-3-flash
+          model: agnes/agnes-3.0-flash
           use_github_token: true
           prompt: |
             安装并使用 ./traindata skill 为Ruhui编写训练数据。
