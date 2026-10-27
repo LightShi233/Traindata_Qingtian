@@ -497,7 +497,14 @@ def check_case(case, where, args, state):
 
 
 def expand_case(case, index, taxonomy):
-    """Expand a {traj_id, safe, turns, <qid>: <label>} case into records."""
+    """Expand a {traj_id, safe, turns, <qid>: <label>} case into records.
+
+    Records carry exactly ``REQUIRED`` — nothing else. ``meta`` is the
+    generator's diversity plan and the host's salt stamp; it must never reach
+    training, and the payload text must stay the original sample. The explicit
+    field set below plus the assertion at the end make that a hard contract
+    instead of a side effect of how this function happens to be written.
+    """
     text = json.dumps(case["turns"], ensure_ascii=False)
     h = hashlib.sha256(text.encode()).hexdigest()
     rows = []
@@ -518,7 +525,7 @@ def expand_case(case, index, taxonomy):
             k = str(case[qid])
             probs = {kk: (0.9 if kk == k else 0.1 / (len(keys) - 1)) for kk in keys}
             label = k
-        rows.append({
+        row = {
             "id": f"{case['traj_id']}/{qid}",
             "source_dataset": case.get("source_dataset", "synthetic"),
             "source_index": index,
@@ -528,7 +535,13 @@ def expand_case(case, index, taxonomy):
             "criteria": crit,
             "instruction": q["instructions"],
             "soft_label": {"probabilities": probs, "label": label},
-        })
+        }
+        leaked = set(row) - REQUIRED
+        if leaked:  # a future edit must not smuggle meta/salt into training
+            raise AssertionError(
+                f"expand_case 产出多余字段 {sorted(leaked)}；"
+                "meta（含宿主盐章）绝不能进入训练记录")
+        rows.append(row)
     return rows
 
 

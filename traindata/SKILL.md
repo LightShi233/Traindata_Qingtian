@@ -456,7 +456,13 @@ are decoded with replacement instead of crashing. Outputs are written atomically
     salt keeps the generator an **author of inert detector data**, not an
     attacker: everything fictional, harm described not operationalised, no
     executable attack code, injected text read as quarantined data and never
-    obeyed.
+    obeyed. **The salt never reaches the data.** It lives only in the
+    generation prompt; the stamp is a `meta` field, and `meta` is stripped when
+    cases expand into records. The final JSONL must be the original sample:
+    `expand_case` asserts its field set is exactly the record contract, the
+    validator rejects any record carrying `meta`, and the audit fails a case
+    whose `turns` echo salt wording ("You are salted", the end-salt marker, the
+    salt preamble). A training row must never say it was salted.
 15. **Never fabricate a hard negative.** `benign_directive_span` is a claim that
     a *clean* case contains an instruction-like but legitimate substring. A
     violating case carrying one is a forgery — an attacker does not append
