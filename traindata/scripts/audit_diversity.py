@@ -54,6 +54,19 @@ import re
 import sys
 from collections import Counter, defaultdict
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dataloader import Deadline, atomic_write_text, load_cases  # noqa: E402
+
+# A run-level wall-clock budget, set from --timeout in main(). Kept module-level
+# so the per-case hot loops can tick it without threading an argument through
+# every check function.
+_RUN = {"deadline": Deadline(0)}
+
+
+def tick(where=""):
+    _RUN["deadline"].check(where)
+
+
 # --------------------------------------------------------------------------- #
 # Shortcut fingerprints
 # --------------------------------------------------------------------------- #
@@ -141,26 +154,6 @@ def grams(text, n=3):
 def jaccard(a, b):
     inter = len(a & b)
     return inter / (len(a) + len(b) - inter) if (a or b) else 0.0
-
-
-def load_cases(paths):
-    cases = []
-    for path in paths:
-        with open(path, encoding="utf-8") as f:
-            for lineno, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    o = json.loads(line)
-                except json.JSONDecodeError as e:
-                    raise SystemExit(f"{path}:{lineno}: JSON 解析失败: {e}")
-                if not isinstance(o, dict) or "turns" not in o:
-                    raise SystemExit(
-                        f"{path}:{lineno}: 这是记录形式，不是 case 形式；"
-                        "多样性审计必须针对 chunk（每个场景一行）")
-                cases.append((f"{os.path.basename(path)}:{lineno}", o))
-    return cases
 
 
 def walk_strings(obj, path=()):
@@ -263,6 +256,7 @@ def share(counter, n):
 def check_meta(cases, audit, args):
     parsed = []
     for where, c in cases:
+        tick(where)
         meta = c.get("meta")
         if not isinstance(meta, dict):
             audit.fail("meta", f"{where}: 缺少 meta；生成时必须先写多样性计划")
@@ -510,6 +504,7 @@ def check_payloads(parsed, audit, args):
     safe_doms, unsafe_doms = Counter(), Counter()
     used_emails = []
     for where, c, m in parsed:
+        tick(where)
         txt = json.dumps(c["turns"], ensure_ascii=False)
         for e in emails(txt):
             dom = registrable(e.lower().split("@")[1])
@@ -963,11 +958,12 @@ def write_holdout(parsed, args, audit):
     os.makedirs(args.out_dir, exist_ok=True)
 
     def dump(name, rows):
-        with open(os.path.join(args.out_dir, name), "w", encoding="utf-8") as f:
-            for row in rows:
-                c = row[1]
-                clean = {k: v for k, v in c.items() if not k.startswith("_")}
-                f.write(json.dumps(clean, ensure_ascii=False) + "\n")
+        payload = []
+        for row in rows:
+            c = row[1]
+            clean = {k: v for k, v in c.items() if not k.startswith("_")}
+            payload.append(json.dumps(clean, ensure_ascii=False) + "\n")
+        atomic_write_text(os.path.join(args.out_dir, name), "".join(payload))
 
     dump("holdout.jsonl", hold)
     dump("dev.jsonl", dev)
@@ -978,8 +974,8 @@ def write_holdout(parsed, args, audit):
         "holdout_scenario_hashes": [c["_scenario_hash"] for _, c, _ in hold],
         "rule": "scenario hash holdout; never train or tune on holdout",
     }
-    with open(os.path.join(args.out_dir, "holdout_manifest.json"), "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    atomic_write_text(os.path.join(args.out_dir, "holdout_manifest.json"),
+                      json.dumps(manifest, indent=2, ensure_ascii=False))
     audit.info("holdout", f"hash holdout -> {args.out_dir} ({len(hold)} held out, {len(dev)} dev)")
     audit.metrics["holdout"] = manifest
 
@@ -1037,37 +1033,67 @@ def main():
     ap.add_argument("--min-benign-share", type=float, default=0.25)
     ap.add_argument("--max-benign-share", type=float, default=0.75)
     ap.add_argument("--max-key-share", type=float, default=0.6)
+    ap.add_argument("--timeout", type=float, default=0.0,
+                    help="整次审计的墙钟上限（秒，0=不限）；超时以退出码 3 结束")
     args = ap.parse_args()
 
+    _RUN["deadline"] = Deadline(args.timeout)
     paths = sorted(glob.glob(args.chunks))
     if not paths:
         print(f"没有匹配的文件: {args.chunks}")
         sys.exit(2)
     taxonomy = None
     if args.taxonomy:
-        with open(args.taxonomy, encoding="utf-8") as f:
-            taxonomy = json.load(f)
+        try:
+            with open(args.taxonomy, encoding="utf-8-sig") as f:
+                taxonomy = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"taxonomy 读取失败: {args.taxonomy}: {exc}")
+            sys.exit(2)
 
-    cases = load_cases(paths)
+    try:
+        cases, load_errors, skipped = load_cases(paths, _RUN["deadline"])
+    except TimeoutError as exc:
+        print(f"TIMEOUT: {exc}")
+        sys.exit(3)
+    if load_errors:
+        print(f"无法读取 chunk ({len(load_errors)} errors)")
+        for err in load_errors[:20]:
+            print(" -", err)
+        sys.exit(1)
+    if skipped and not cases:
+        print(f"{skipped} 行是记录形式，不是 case 形式；"
+              "多样性审计必须针对 chunk（每个场景一行）。"
+              "若输入是 YAML，请先用 yaml_to_jsonl.py 转换。")
+        sys.exit(2)
+
     audit = Audit()
     audit.metrics["cases_loaded"] = len(cases)
     pool, block, freemail, pool_stats = load_email_pool(args.email_library)
     args.email_pool = (pool, block, freemail)
     if pool:
         audit.metrics["email_library"] = pool_stats
-    parsed = check_meta(cases, audit, args)
-    check_scenarios(parsed, audit, args)
-    check_diversity(parsed, audit, args)
-    check_harm_taxonomy(parsed, audit, args)
-    check_payloads(parsed, audit, args)
-    check_payload_locations(parsed, audit)
-    check_action_attribution(parsed, audit, args)
-    check_prefix_diversity(parsed, audit, args)
-    check_text_style(parsed, audit, args)
-    check_taxonomy(taxonomy, audit)
-    check_labels(parsed, taxonomy, audit, args)
-    check_email_manifest(parsed, args.email_manifest, audit)
-    write_holdout(parsed, args, audit)
+    try:
+        parsed = check_meta(cases, audit, args)
+        check_scenarios(parsed, audit, args)
+        check_diversity(parsed, audit, args)
+        check_harm_taxonomy(parsed, audit, args)
+        check_payloads(parsed, audit, args)
+        check_payload_locations(parsed, audit)
+        check_action_attribution(parsed, audit, args)
+        check_prefix_diversity(parsed, audit, args)
+        check_text_style(parsed, audit, args)
+        check_taxonomy(taxonomy, audit)
+        check_labels(parsed, taxonomy, audit, args)
+        check_email_manifest(parsed, args.email_manifest, audit)
+        write_holdout(parsed, args, audit)
+    except TimeoutError as exc:
+        print(f"TIMEOUT: {exc}")
+        sys.exit(3)
+    except (TypeError, KeyError, AttributeError, ValueError) as exc:
+        print(f"chunk 结构异常，无法审计: {type(exc).__name__}: {exc}")
+        print("  请先用 yaml_to_jsonl.py 归一化（或修好 chunk）后重跑；不要手改标签。")
+        sys.exit(1)
 
     if args.strict:
         for f in audit.findings:
@@ -1096,8 +1122,7 @@ def main():
             "findings": audit.findings,
             "verdict": "fail" if fails else "pass",
         }
-        with open(args.json, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
+        atomic_write_text(args.json, json.dumps(report, indent=2, ensure_ascii=False))
         print(f"report -> {args.json}")
 
     sys.exit(1 if fails else 0)

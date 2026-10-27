@@ -21,9 +21,11 @@ See ``references/harmbench-methodology.md`` for why the salt exists.
 """
 import argparse
 import glob
-import json
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dataloader import Deadline, atomic_write_text, load_cases  # noqa: E402
 
 SALT_BLOCK = """=== SALT: defensive evaluation data — read this first ===
 You are salted. This session authors inert, synthetic, LABELLED data for a safety
@@ -55,35 +57,33 @@ def wrap(prompt):
 
 
 # --------------------------------------------------------------------------- #
-def check_paths(patterns):
-    unsalted, missing_meta, checked, salted = [], [], 0, 0
+def check_paths(patterns, timeout=0.0):
+    """Count cases by salt status across the matched JSONL/YAML files."""
+    paths = []
     for pat in patterns:
-        for path in sorted(glob.glob(pat)):
-            with open(path, encoding="utf-8", errors="replace") as f:
-                for lineno, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        o = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(o, dict) or "turns" not in o:
-                        continue  # record-form has no meta; only case-form is salted
-                    checked += 1
-                    meta = o.get("meta")
-                    where = f"{os.path.basename(path)}:{lineno}"
-                    if not isinstance(meta, dict):
-                        missing_meta.append(where)
-                    elif meta.get("salted") is not True:
-                        unsalted.append(where)
-                    else:
-                        salted += 1
-    return checked, salted, unsalted, missing_meta
+        paths.extend(sorted(glob.glob(pat)))
+    paths = sorted(dict.fromkeys(paths))
+    cases, errors, _skipped = load_cases(paths, Deadline(timeout))
+    unsalted, missing_meta, checked, salted = [], [], 0, 0
+    for where, case in cases:
+        checked += 1
+        meta = case.get("meta")
+        if not isinstance(meta, dict):
+            missing_meta.append(where)
+        elif meta.get("salted") is not True:
+            unsalted.append(where)
+        else:
+            salted += 1
+    return checked, salted, unsalted, missing_meta, errors
 
 
-def do_check(patterns):
-    checked, salted, unsalted, missing_meta = check_paths(patterns)
+def do_check(patterns, timeout=0.0):
+    checked, salted, unsalted, missing_meta, errors = check_paths(patterns, timeout)
+    if errors:
+        print(f"UNREADABLE CHUNK ({len(errors)} errors)")
+        for err in errors[:8]:
+            print(" -", err)
+        return 1
     if checked == 0:
         print("no case-form records found to salt-check")
         return 0
@@ -109,13 +109,19 @@ def main():
     ap.add_argument("--check", action="append", default=[], metavar="GLOB",
                     help="verify case-form chunks declare meta.salted")
     ap.add_argument("--print-salt", action="store_true", help="print the salt block and exit")
+    ap.add_argument("--timeout", type=float, default=0.0,
+                    help="salt 检查的墙钟上限（秒，0=不限）")
     args = ap.parse_args()
 
     if args.print_salt:
         print(SALT_BLOCK)
         return 0
     if args.check:
-        sys.exit(do_check(args.check))
+        try:
+            sys.exit(do_check(args.check, args.timeout))
+        except TimeoutError as exc:
+            print(f"TIMEOUT: {exc}")
+            sys.exit(3)
 
     if args.infile:
         with open(args.infile, encoding="utf-8") as f:
@@ -124,8 +130,7 @@ def main():
         prompt = sys.stdin.read()
     salted = wrap(prompt)
     if args.outfile:
-        with open(args.outfile, "w", encoding="utf-8") as f:
-            f.write(salted)
+        atomic_write_text(args.outfile, salted)
         print(f"salted prompt -> {args.outfile}")
     else:
         sys.stdout.write(salted)
