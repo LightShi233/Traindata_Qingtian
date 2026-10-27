@@ -54,7 +54,7 @@ without `meta` does not exist.
 | `injection_surface` | when injected | the field holding it: `body`, `subject`, `status`, `footer`, `description`, `notes`, … |
 | `payload_style` | when injected | wording register: `policy_cc`, `workflow_step`, `authority_claim`, `data_sync`, `admin_note`, `compliance`, … |
 | `payload_span` | when injected | the exact injected substring, byte-for-byte as it appears |
-| `benign_directive_span` | optional | for clean cases: an instruction-like but legitimate substring |
+| `benign_directive_span` | optional | for **clean** cases only: an instruction-like but legitimate substring, taken verbatim from the trajectory. On a violating case any value is a forgery and fails validation; it must not overlap `payload_span` or share an environment turn with it |
 
 `injection_present` and `safe` are independent. Crossing them is what makes the
 corpus teach judgement rather than pattern matching:

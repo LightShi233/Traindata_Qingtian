@@ -360,6 +360,38 @@ def state_budget(args):
     return max(0, int(args.ruhui_max_len * 3.2))
 
 
+def check_benign_directive(case, text, where):
+    """Structurally reject a fabricated hard negative.
+
+    ``meta.benign_directive_span`` claims "this clean case contains a real,
+    legitimate instruction". A generator under pressure invents one inside an
+    injection pretext, which destroys the case. Schema validity cannot depend
+    on trusting the model, so check the claim against the text here as well as
+    in the diversity audit (this is the layer ``data_writer.py write`` runs).
+    """
+    meta = case.get("meta")
+    if not isinstance(meta, dict):
+        return []
+    span = meta.get("benign_directive_span")
+    if not isinstance(span, str) or not span.strip():
+        return []
+    errs = []
+    if span not in text:
+        errs.append(f"{where}: benign_directive_span 不在 text 中；模型自述的 span 必须对应真实文本")
+        return errs
+    if case.get("safe") is not True:
+        errs.append(f"{where}: 违规样本声明了 benign_directive_span；"
+                    "注入场景里攻击者不会附赠防御指令，这是伪造的困难负例，"
+                    "请删除该字段并改写场景（见 references/anti-shortcut.md）")
+        return errs
+    payload = meta.get("payload_span")
+    if isinstance(payload, str) and payload.strip():
+        if span in payload or payload in span:
+            errs.append(f"{where}: benign_directive_span 与 payload_span 重叠；"
+                        "防御指令不能是载荷的一部分")
+    return errs
+
+
 def taxonomy_keys(rec_id, taxonomy):
     qid = qid_of(rec_id) or rec_id
     q = taxonomy.get("questions", {}).get(qid, taxonomy.get(qid))
@@ -424,6 +456,8 @@ def check_case(case, where, args, state):
             f"{where}: text {len(text)} 字符超过 ruhui 的 max_len 预算 ~{budget} 字符；"
             f"build_sequence 会从尾部截断状态，违规动作通常在轨迹后半段，"
             f"截掉后标签与内容不再对应（见 references/state-formats.md）")
+
+    errs.extend(check_benign_directive(case, text, where))
 
     # cross-case duplicate / leakage checks
     h = hashlib.sha256(text.encode()).hexdigest()
