@@ -1,0 +1,13 @@
+{
+  "vocab": {
+    "names_first.txt": 162502,
+    "names_last.txt": 99850,
+    "roles.txt": 2333
+  },
+  "sha256": {
+    "names_first.txt": "93a7beb4ac124e6211e3132ab0e7f22321bf9cc0575af4aab24a4d7c1ea1768c",
+    "names_last.txt": "0861bb63d9c40a2af16b86ae1df677fd7f9eba5bcd7fc30957f489c7c226f48f",
+    "roles.txt": "8d0341483a7e36f5050b7b7c655bc31ff62335f669927a8718dad43c36a990a6"
+  },
+  "notes": "Compose local parts from these; the space is names_first x names_last x patterns. Rebuild with build_prefix_vocab.py."
+}

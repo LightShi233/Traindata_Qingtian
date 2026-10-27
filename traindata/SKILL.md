@@ -138,10 +138,14 @@ Tips that make this work in practice:
 
 - **Sample the addresses first**, then put the locked list in the prompt:
   `python3 traindata/scripts/sample_emails.py --scenario <safe|violation|injection> \
-  --count <n> --cross-map --manifest email_assignment.json`. The generator must
-  reuse those exact strings. It must **not** read the library files itself — the
-  tiers and weights are the model, and the manifest is enforced as a locked
-  whitelist by the audit.
+  --count <n> --cross-map --manifest email_assignment.json --ledger prefix_ledger.txt`.
+  The generator must reuse those exact strings. It must **not** read the library
+  files itself — the tiers, weights and the compositional prefix grammar are the
+  model, and the manifest is enforced as a locked whitelist by the audit.
+- Pass the **same `--ledger`** to every chunk. Local parts are composed from
+  `names_first × names_last × roles` (billions of combinations) and recorded in
+  the ledger, so prefixes stay unique across the whole corpus, not just within a
+  chunk. The audit fails a prefix reused in more than a couple of cases.
 - Request a **structured** batch (a JSON array of cases) per call, with the
   target counts, the required label coverage, and the **diversity plan** spelled
   out in the prompt.
@@ -317,11 +321,15 @@ the repository root.
 - `references/taxonomy-design.md` — designing reusable option/level sets.
 - `assets/inspection-report.md` — template for Phase 4 review.
 - `assets/email_library/` — welded email pool: `freemail.txt`, `synth_domains.txt`,
-  `known_blocklist.txt`, `abuse_contacts.txt`, `prefixes.txt` (+ `email_library.json`).
+  `known_blocklist.txt`, `abuse_contacts.txt`; compositional prefix vocab
+  `names_first.txt` / `names_last.txt` / `roles.txt`; `prefixes.txt` (curated);
+  `email_library.json` / `prefix_vocab.json`; raw sources under `sources/`.
 - `scripts/validate_and_integrate.py` — runnable validator/integrator, used in place.
 - `scripts/audit_diversity.py` — runnable anti-shortcut / diversity gate.
-- `scripts/sample_emails.py` — locked, tiered, cross-mapped email batches + dedup check.
-- `scripts/build_email_library.py` — rebuilds the welded pool (provenance only).
+- `scripts/sample_emails.py` — locked, tiered, cross-mapped batches + prefix
+  ledger + dedup check.
+- `scripts/build_email_library.py` — rebuilds the welded domain pool (provenance).
+- `scripts/build_prefix_vocab.py` — rebuilds the name/role vocab (provenance).
 
 ## Quick checks
 

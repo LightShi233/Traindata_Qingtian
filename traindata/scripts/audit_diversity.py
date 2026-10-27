@@ -25,6 +25,7 @@ Hard failures (exit 1) cover:
 - address style becoming the label: disposable or free-mail share skewed between
   clean and violating contexts; attacks almost all sent to throwaway domains
 - emails that do not come from ``assets/email_library``
+- a local part reused across many cases (prefix overfitting)
 - a safe case on a disposable address with no neutralising thought, or a
   violation not justified by an agent action
 - a choice/score head whose instruction mixes "cause" and "vaccine"
@@ -660,6 +661,33 @@ def check_payload_locations(parsed, audit):
             audit.fail("payload-loc", f"{where}: meta.injection_surface={declared!r} 与文本实际位置 {sorted(surfaces)} 不符")
 
 
+SYSTEM_MAILBOXES = {"abuse", "postmaster", "webmaster", "hostmaster", "mailerdaemon",
+                    "noreply", "no-reply", "donotreply", "admin", "root", "support",
+                    "info", "contact", "hello", "security", "privacy", "dpo"}
+
+
+def check_prefix_diversity(parsed, audit, args):
+    """Local parts must not be reused across many cases (prefix overfitting)."""
+    cases_for = defaultdict(set)
+    for where, c, _m in parsed:
+        ck = where
+        for e in emails(json.dumps(c["turns"], ensure_ascii=False)):
+            local = e.lower().split("@")[0]
+            if local in SYSTEM_MAILBOXES:
+                continue
+            cases_for[local].add(ck)
+    if not cases_for:
+        return
+    reused = {p: len(v) for p, v in cases_for.items() if len(v) > args.max_prefix_reuse}
+    audit.metrics["distinct_prefixes"] = len(cases_for)
+    if reused:
+        top = sorted(reused.items(), key=lambda kv: -kv[1])[:5]
+        audit.fail("prefix",
+                   f"{len(reused)} 个邮箱前缀被复用到 >{args.max_prefix_reuse} 个场景（例：{top}）；"
+                   "前缀也是特征。用 sample_emails.py 的组合前缀并全程传同一个 --ledger，"
+                   "保证跨 chunk 唯一")
+
+
 def check_text_style(parsed, audit, args):
     n = len(parsed)
     user_openers = Counter()
@@ -906,6 +934,8 @@ def main():
                     help="违规场景中正常免费邮箱的最低占比（攻击者也会用 gmail）")
     ap.add_argument("--max-disposable-in-violations", type=float, default=0.5,
                     help="违规场景中一次性域名的最高占比")
+    ap.add_argument("--max-prefix-reuse", type=int, default=2,
+                    help="同一邮箱前缀最多出现在几个场景")
 
     ap.add_argument("--max-unsafe-share", type=float, default=0.5)
     ap.add_argument("--max-injected-share", type=float, default=0.5)
@@ -948,6 +978,7 @@ def main():
     check_payloads(parsed, audit, args)
     check_payload_locations(parsed, audit)
     check_action_attribution(parsed, audit, args)
+    check_prefix_diversity(parsed, audit, args)
     check_text_style(parsed, audit, args)
     check_taxonomy(taxonomy, audit)
     check_labels(parsed, taxonomy, audit, args)
