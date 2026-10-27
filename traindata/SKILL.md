@@ -139,7 +139,9 @@ Tips that make this work in practice:
 - **Sample the addresses first**, then put the locked list in the prompt:
   `python3 traindata/scripts/sample_emails.py --scenario <safe|violation|injection> \
   --count <n> --cross-map --manifest email_assignment.json`. The generator must
-  reuse those exact strings; it must not invent addresses.
+  reuse those exact strings. It must **not** read the library files itself — the
+  tiers and weights are the model, and the manifest is enforced as a locked
+  whitelist by the audit.
 - Request a **structured** batch (a JSON array of cases) per call, with the
   target counts, the required label coverage, and the **diversity plan** spelled
   out in the prompt.
@@ -258,13 +260,16 @@ Full schema details, with edge cases and a worked example, are in
    `validate_and_integrate.py` and `audit_diversity.py` must exit 0.
 4. **Test data is never training data.** Keep ID ranges, files, and the scenario
    holdout disjoint.
-5. **Addresses come from the welded pool, and domains are never blacklisted.**
-   Use `traindata/scripts/sample_emails.py` to draw a locked batch from
-   `traindata/assets/email_library/` (disposable/toxic and invented corporate
-   domains, one uniform pool) and reuse those exact strings. Do not invent
-   addresses and do not exclude throwaway providers — sample them into clean and
-   violating cases alike (cross-mapping). No real personal data, no real
-   credentials, no directly executable attack code.
+5. **Addresses come only from `sample_emails.py`, and domains are never
+   blacklisted.** The generator must **run** `traindata/scripts/sample_emails.py`
+   and use its output verbatim; it must **not** read, grep, `cat`, or otherwise
+   open `traindata/assets/email_library/*` itself, and must not invent
+   addresses. The library is a probability model (tiers + weights + cross-map),
+   not a menu — reading it would skip the weighting. The audit treats the
+   `--manifest` as a **locked whitelist**, so hand-picked domains fail even when
+   they are in the pool. Do not exclude throwaway providers: sample them into
+   clean and violating cases alike. No real personal data, no real credentials,
+   no directly executable attack code.
 6. **Keep the taxonomy stable.** Reuse option/level sets across records; a
    per-record invention defeats calibration.
 7. **Do not let labels collapse.** Both (or all) classes must carry meaningful

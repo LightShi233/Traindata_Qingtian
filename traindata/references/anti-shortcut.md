@@ -101,11 +101,17 @@ Addresses are the easiest accidental label. The skill ships a welded
 - `prefixes.txt` — ~3.2k local-part prefixes;
 - `email_library.json` — counts and sha256 so drift is detectable.
 
-**Never exclude a domain.** Disposable and corporate domains are drawn uniformly
-from the same pool. Excluding the well-known throwaway providers is data
-poisoning and confirmation bias: real attackers use free temporary mailboxes, so
-a model that never saw `guerrillamail.com` in training will be blind to it in
-production. The fix is context, not a blacklist.
+**Never exclude a domain**, and **never let the generator read the pool**. The
+only supported interface is `sample_emails.py`: it is the probability model
+(tiers + weights + cross-map + seed). A generator that opens
+`traindata/assets/email_library/*` and picks domains by hand has skipped the
+weighting. Enforcement is not a promise: pass the batch's `--manifest` to the
+audit, which treats it as a **locked whitelist** — any address outside the batch
+fails, even if it is a legitimate pool member. Disposable and corporate domains
+are drawn from the same tiers. Excluding the well-known throwaway providers is
+data poisoning and confirmation bias: real attackers use free temporary
+mailboxes, so a model that never saw `guerrillamail.com` in training will be
+blind to it in production. The fix is context, not a blacklist.
 
 `traindata/scripts/sample_emails.py` hands the generator a locked batch and a
 ready-to-paste prompt block:
