@@ -1,7 +1,7 @@
 ---
 name: traindata
 description: Generate large, validated soft-label (.jsonl) training data for a ruhui-style non-autoregressive decision model, covering noul/choice/score question types with 0.9/spread soft distributions. Use when asked to synthesize, expand, clean, or validate soft-label training data, build a taxonomy of questions for a text-classification/decision dataset, create a held-out test set, or check generated data for label collapse, duplicate/near-duplicate leakage, schema errors, surface-fingerprint shortcut learning, diversity collapse, or dual-polarity question wording.
-license: See LICENSE in the parent repository
+license: GPL-3.0 (see LICENSE in the repository root)
 compatibility: Requires Python 3.9+ (standard library only). No network access required.
 allowed-tools: Read Write Edit Glob Grep Bash(python3:*) Bash(python:*)
 metadata:
@@ -330,6 +330,8 @@ the repository root.
   ledger + dedup check.
 - `scripts/build_email_library.py` — rebuilds the welded domain pool (provenance).
 - `scripts/build_prefix_vocab.py` — rebuilds the name/role vocab (provenance).
+- `scripts/build_ccnc_sources.py` — romanizes CCNC Chinese names to pinyin (needs
+  `nix-shell -p python3Packages.pypinyin`; outputs are committed).
 
 ## Quick checks
 

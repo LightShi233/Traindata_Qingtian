@@ -100,7 +100,7 @@ Addresses are the easiest accidental label. The skill ships a welded
 - `known_blocklist.txt` — ~280k real disposable/toxic domains, **all usable**;
 - `synth_domains.txt` — ~3.5k invented corporate domains, **all usable**;
 - `prefixes.txt` — curated local-part prefixes (legacy extras);
-- `names_first.txt` — ~160k given names (names.io + additions);
+- `names_first.txt` — ~216k given names (names.io + CCNC pinyin + additions);
 - `names_last.txt` — ~100k family names;
 - `roles.txt` — ~2.3k role/team mailbox words;
 - `email_library.json`, `prefix_vocab.json` — counts and sha256 so drift is

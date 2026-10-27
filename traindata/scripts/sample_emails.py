@@ -88,7 +88,7 @@ INTENT = re.compile(
 class PrefixFactory:
     """Compose fresh local parts from names x surnames x roles.
 
-    The space is names_first(160k) x names_last(100k) x patterns, so it cannot be
+    The space is names_first(216k) x names_last(100k) x patterns, so it cannot be
     memorised or exhausted the way a fixed prefix list can. A ledger keeps the
     prefixes unique across chunks, not just within a batch.
     """
