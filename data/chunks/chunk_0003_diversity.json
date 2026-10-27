@@ -1,0 +1,132 @@
+{
+  "files": [
+    "data/chunks/chunk_0003.jsonl"
+  ],
+  "metrics": {
+    "cases_loaded": 10,
+    "email_library": {
+      "domains": 284332,
+      "known_blocklist": 280259,
+      "freemail": 574
+    },
+    "unique_scenarios": 10,
+    "cases": 10,
+    "safe_share": {
+      "True": 0.5,
+      "False": 0.5
+    },
+    "injection_share": 0.4,
+    "resisted_injection": 2,
+    "yielded_injection": 2,
+    "meta.scenario_family": {
+      "ticket_reply": 2,
+      "export_review": 1,
+      "kb_triage": 1,
+      "doc_lookup": 1,
+      "queue_cleanup": 1,
+      "calendar_booking": 1,
+      "data_reconciliation": 1,
+      "status_ping": 1,
+      "incident_status": 1
+    },
+    "meta.entity_family": {
+      "QuillFern Underwriting": 1,
+      "Harborview Claims": 1,
+      "Mosaic Pay": 1,
+      "Ironquay Freight": 1,
+      "Solent Brack": 1,
+      "Vanta Courier": 1,
+      "Crestline HR": 1,
+      "Redstone Labs": 1,
+      "Fern Hollow": 1,
+      "Bluepeak Analytics": 1
+    },
+    "meta.id_style": {
+      "upper-dash-id": 2,
+      "uuid": 2,
+      "hash-number": 1,
+      "slug": 1,
+      "date-sequence": 1,
+      "upper-dash CHR-7xxx": 1,
+      "upper-dash RSL-9xxx": 1,
+      "hash-number #3390": 1
+    },
+    "meta.thought_style": {
+      "terse_check": 2,
+      "skeptical": 2,
+      "planner": 2,
+      "cautious": 2,
+      "domain_expert": 1,
+      "uncertain": 1
+    },
+    "meta.injection_surface": {
+      "body": 1,
+      "status": 1,
+      "footer": 1,
+      "subject": 1
+    },
+    "meta.payload_style": {
+      "workflow_step": 1,
+      "data_sync": 1,
+      "policy_cc": 1,
+      "authority_claim": 1
+    },
+    "unknown_domains": [],
+    "blocklist_share": {
+      "safe": 0.5,
+      "unsafe": 0.3125
+    },
+    "freemail_share": {
+      "safe": 0.5625,
+      "unsafe": 0.4375
+    },
+    "email_presence": {
+      "clean": 1.0,
+      "injected": 1.0
+    },
+    "benign_directive_share": 0.6,
+    "neutralized_temp_mail": 2,
+    "distinct_prefixes": 10,
+    "id_forms": [
+      "hash-number-id",
+      "hex-hash",
+      "slug",
+      "upper-dash-id",
+      "uuid"
+    ],
+    "email_domains": {
+      "salesperson.net": 9,
+      "europemail.com": 7,
+      "heliq.dev": 7,
+      "druvixcaregroup.org": 5,
+      "88303.xyz": 4
+    },
+    "labels.mechanism": {
+      "injection": 4,
+      "misdirection": 2,
+      "own_reasoning": 2,
+      "faulty_input": 1,
+      "other": 1
+    },
+    "labels.severity": {
+      "0": 5,
+      "2": 2,
+      "3": 2,
+      "1": 1
+    },
+    "email_manifest": {
+      "batch_size": 10,
+      "used": 10,
+      "off_batch": 0,
+      "pairs": 5
+    }
+  },
+  "findings": [
+    {
+      "level": "INFO",
+      "code": "locked-batch",
+      "message": "locked batch honoured: 10/10 addresses used"
+    }
+  ],
+  "verdict": "pass"
+}

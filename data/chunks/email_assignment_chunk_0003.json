@@ -1,0 +1,69 @@
+{
+  "scenario": "violation",
+  "seed": 42,
+  "count": 10,
+  "weights": {
+    "freemail": 0.5,
+    "synth": 0.3,
+    "disposable": 0.2
+  },
+  "emails": [
+    "k.falkowski@88303.xyz",
+    "s_smestad@88303.xyz",
+    "m.gohil@druvixcaregroup.org",
+    "compliancehub-helpcenter@druvixcaregroup.org",
+    "tephen.hurlbert@europemail.com",
+    "jkaraffa@europemail.com",
+    "brokerdesk.servicedeskunit@heliq.dev",
+    "accesscontrol@heliq.dev",
+    "bseiz@salesperson.net",
+    "s.batterson@salesperson.net"
+  ],
+  "pairs": [
+    {
+      "domain": "88303.xyz",
+      "tier": "disposable",
+      "addresses": [
+        "k.falkowski@88303.xyz",
+        "s_smestad@88303.xyz"
+      ]
+    },
+    {
+      "domain": "druvixcaregroup.org",
+      "tier": "synth",
+      "addresses": [
+        "m.gohil@druvixcaregroup.org",
+        "compliancehub-helpcenter@druvixcaregroup.org"
+      ]
+    },
+    {
+      "domain": "europemail.com",
+      "tier": "freemail",
+      "addresses": [
+        "tephen.hurlbert@europemail.com",
+        "jkaraffa@europemail.com"
+      ]
+    },
+    {
+      "domain": "heliq.dev",
+      "tier": "synth",
+      "addresses": [
+        "brokerdesk.servicedeskunit@heliq.dev",
+        "accesscontrol@heliq.dev"
+      ]
+    },
+    {
+      "domain": "salesperson.net",
+      "tier": "freemail",
+      "addresses": [
+        "bseiz@salesperson.net",
+        "s.batterson@salesperson.net"
+      ]
+    }
+  ],
+  "tier_counts": {
+    "disposable": 1,
+    "synth": 2,
+    "freemail": 2
+  }
+}

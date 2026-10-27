@@ -1,0 +1,10 @@
+{
+  "seed": 13,
+  "holdout_cases": 2,
+  "dev_cases": 8,
+  "holdout_scenario_hashes": [
+    "f0729c9e5b791aa5f6705237e6f4bea30bcd0686e4fa8769c46c98bd822316e4",
+    "ea4262afee4e046820aae1d54a55cc9129614414cc77076d967a7ecc8017b2ef"
+  ],
+  "rule": "scenario hash holdout; never train or tune on holdout"
+}
