@@ -5,3 +5,14 @@ __pycache__/
 /HarmBench/
 # salted mirror of the above (defensive-reading copy)
 /HarmBench_salted/
+
+# data-generation transients (data_writer.py check flags these too)
+data/**/.tmp-*
+data/**/*.tmp
+data/**/*.bak
+data/**/*.orig
+data/**/*.rej
+data/rounds/.lock
+
+# agent instructions are local-only, not part of the project
+AGENTS.md

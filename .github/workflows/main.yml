@@ -30,15 +30,26 @@ jobs:
           use_github_token: true
           prompt: |
             安装并使用 ./traindata skill 为Ruhui编写训练数据。
-            要求：
-            1. 严格遵循 traindata skill 中的模板与流程约束：，严禁修改 .github/ 目录下任何文件，包括 workflows，只允许改动产出目录和必要的源码文件
+            硬性要求：
+            1. 只允许改动 ./data 目录；严禁修改 .github/、traindata/ 或任何已有源码。
+               严禁新增任何 .py 脚本（尤其是 author.py / gen.py 之类的生成器）：
+               工具已经现成，你只负责输出 YAML 并调用 traindata/scripts/data_writer.py。
 
-            2. 先用 YAML 编写每个 case（action 写成映射、长文本用 | 块标量），
-               再用 traindata/scripts/yaml_to_jsonl.py 转换为 jsonl 写入 ./data 目录；
-               严禁手写或手改 jsonl。转换与两个 gate 都要带 --timeout，超时（退出码 3）
-               视为该 chunk 未通过：缩小 chunk 重来，不要调大超时
-            3. 完成后提交，开一个 PR 标题前缀为 [traindata_add]
-            4. 绝对严禁私自把你制作的样本与文件夹中其他样本合并
-            5. 绝对严禁一次产出超过10个样本，但使用子代理，并且有相应验证时本规则例外
-            6. 特别强调多样性原则。在用脚本检查发现。多样性不足时强制更改，或用子代理更改
+            2. 先用 data_writer.py allocate --count N 领取文件名，把纯 YAML 写到它打印的
+               data/inbox/chunk_NNNN.yaml（action 写成映射、长文本用 | 块标量），
+               再执行 data_writer.py write 转换。严禁手写、手改或另存 jsonl。
+               即使使用子代理，也由主代理统一 allocate，子代理只写分配给它的 YAML 槽位。
+
+            3. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
+               严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
+
+            4. 提交前必须运行 data_writer.py check --round <id> --strict 且通过；
+               严禁提交任何临时/备份文件（.tmp-*、*.tmp、*.bak、__pycache__ 等）。
+
+            5. 转换与两个 gate 都要带 --timeout；退出码 3 表示该 chunk 未通过，
+               缩小 chunk 重来，不要调大超时。
+
+            6. 完成后提交，开一个 PR 标题前缀为 [traindata_add]
+            7. 绝对严禁一次产出超过10个样本，但使用子代理，并且有相应验证时本规则例外
+            8. 特别强调多样性原则：用脚本检查，多样性不足时强制更改，或用子代理更改
 
