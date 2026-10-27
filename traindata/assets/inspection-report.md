@@ -56,6 +56,8 @@ each dimension by hand:
 | scenario skeletons (first words of the user turn) | | |
 | thought voice (openers, phrase reuse) | | |
 | emails all from `email_library` (no invented domains) | | `--require-library-emails` |
+| locked batch honoured (no off-batch addresses) | | `--email-manifest` |
+| local-part prefixes not reused (>2 cases) | | compositional + `--ledger` |
 | email cross-map: disposable share safe vs unsafe ≤ 30 pts | | |
 | dangerous attacks not all on disposable domains | | violation profile: ≥50% freemail |
 | email presence parity clean vs injected | | |

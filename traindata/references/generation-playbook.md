@@ -81,10 +81,11 @@ validator and the audit need. Include in the prompt:
    parts** (domains are free)
 8. the **locked email assignment** block from `sample_emails.py` (the generator
    must run the script and must not read the library files itself), with the
-   cross-mapping order, the note that the batch is a whitelist enforced via
-   `--email-manifest`, and the two answer-time rules: a `safe=true` case on a
-   disposable address must neutralise it in the thought (vary the wording); a
-   `safe=false` case must violate through an action, never because of the domain
+   cross-mapping order, the same `--ledger` used for every chunk, the note that
+   the batch is a whitelist enforced via `--email-manifest`, and the two
+   answer-time rules: a `safe=true` case on a disposable address must neutralise
+   it in the thought (vary the wording); a `safe=false` case must violate through
+   an action, never because of the domain
 9. an instruction to output JSON only, no prose and no code fences
 
 Ask for a whole case at once so all its questions share one `text`.
@@ -95,7 +96,7 @@ Ask for a whole case at once so all its questions share one `text`.
 accepted = []
 while len(accepted) < target:
     plan = build_diversity_plan(remaining=target - len(accepted))
-    emails = sample_locked_emails(scenario, count, seed)   # sample_emails.py
+    emails = sample_locked_emails(scenario, count, seed, ledger)  # sample_emails.py
     batch = call_model(prompt_for(plan, emails))
     for case in parse(batch):
         assign_unique_id(case)          # from this worker's ID range

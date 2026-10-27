@@ -79,6 +79,7 @@ corpus teach judgement rather than pattern matching:
 | org/entity family | each family ≤ 25% of cases; ≥ 3 distinct and ≥ 50% of cases use a distinct family |
 | ID style label | no `id_style` in > 40% of cases; ≥ 3 distinct |
 | ID formats | ≥ 3 formats across the corpus (the audit finds them in the text) |
+| local-part prefixes | composed from names × roles; no prefix in more than 2 cases; ledger kept corpus-wide |
 | email source | every address comes from `traindata/assets/email_library/` (use `sample_emails.py`); unknown domains are a warning, or a failure under `--require-library-emails` |
 | email cross-map | known-disposable share in safe vs unsafe contexts differs by ≤ 30 points; no domain appears 3+ times on only one side; an `--email-manifest` pair must appear in both contexts |
 | email concentration | no single registrable domain > 50% of all addresses |
@@ -98,8 +99,18 @@ Addresses are the easiest accidental label. The skill ships a welded
 
 - `known_blocklist.txt` — ~280k real disposable/toxic domains, **all usable**;
 - `synth_domains.txt` — ~3.5k invented corporate domains, **all usable**;
-- `prefixes.txt` — ~3.2k local-part prefixes;
-- `email_library.json` — counts and sha256 so drift is detectable.
+- `prefixes.txt` — curated local-part prefixes (legacy extras);
+- `names_first.txt` — ~160k given names (names.io + additions);
+- `names_last.txt` — ~100k family names;
+- `roles.txt` — ~2.3k role/team mailbox words;
+- `email_library.json`, `prefix_vocab.json` — counts and sha256 so drift is
+  detectable.
+
+Local parts are **composed**, not drawn from a short list: `sample_emails.py`
+builds them from `names_first × names_last × roles × patterns`, a space of
+billions, and records each one in a `--ledger` so they stay unique across chunks.
+A fixed 3k prefix list would be memorised across a 2000-case corpus; the
+composition cannot be.
 
 **Never exclude a domain**, and **never let the generator read the pool**. The
 only supported interface is `sample_emails.py`: it is the probability model
@@ -118,7 +129,8 @@ ready-to-paste prompt block:
 
 ```bash
 python3 traindata/scripts/sample_emails.py --count 10 --seed 7 \
-  --cross-map --require-blocklist --manifest email_assignment.json
+  --cross-map --require-blocklist --ledger prefix_ledger.txt \
+  --manifest email_assignment.json
 ```
 
 `--cross-map` pairs two addresses on the same domain and instructs the generator

@@ -69,12 +69,86 @@ def load_lines(path):
 
 def load_library(path):
     return {
-        "prefixes": load_lines(os.path.join(path, "prefixes.txt")),
+        "prefixes": load_lines(os.path.join(path, "prefixes.txt")),   # curated extras
+        "first": load_lines(os.path.join(path, "names_first.txt")),
+        "last": load_lines(os.path.join(path, "names_last.txt")),
+        "roles": load_lines(os.path.join(path, "roles.txt")),
         "freemail": load_lines(os.path.join(path, "freemail.txt")),
         "synth": load_lines(os.path.join(path, "synth_domains.txt")),
         "disposable": load_lines(os.path.join(path, "known_blocklist.txt")),
         "abuse": load_lines(os.path.join(path, "abuse_contacts.txt")),
     }
+
+
+PREFIX_OK = re.compile(r"^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$")
+INTENT = re.compile(
+    r"(^|[._+-])(ext|external|outside|attacker|evil|exfil\w*|phish\w*|malware|scam)([._+-]|$)")
+
+
+class PrefixFactory:
+    """Compose fresh local parts from names x surnames x roles.
+
+    The space is names_first(160k) x names_last(100k) x patterns, so it cannot be
+    memorised or exhausted the way a fixed prefix list can. A ledger keeps the
+    prefixes unique across chunks, not just within a batch.
+    """
+
+    def __init__(self, lib, rng, used=None):
+        self.first, self.last = lib.get("first", []), lib.get("last", [])
+        self.roles, self.curated = lib.get("roles", []), lib.get("prefixes", [])
+        self.rng = rng
+        self.used = set(used or ())
+        self.produced = []
+
+    def compose(self):
+        r = self.rng.random()
+        if self.first and self.last and r < 0.6:
+            f = self.rng.choice(self.first)
+            l = self.rng.choice(self.last)
+            pat = self.rng.choice(("f.last", "first.last", "firstl", "first_last",
+                                   "firstlast", "flast", "f_last", "first.l"))
+            return {"f.last": f"{f[0]}.{l}", "first.last": f"{f}.{l}",
+                    "firstl": f"{f}{l[0]}", "first_last": f"{f}_{l}",
+                    "firstlast": f"{f}{l}", "flast": f"{f[0]}{l}",
+                    "f_last": f"{f[0]}_{l}", "first.l": f"{f}.{l[0]}"}[pat]
+        if self.roles and r < 0.96:
+            role = self.rng.choice(self.roles)
+            team = self.rng.choice(self.roles)
+            pat = self.rng.choice(("role", "role.team", "role-team", "role_team",
+                                   "dept.role", "roleNN", "role.desk"))
+            return {"role": role, "role.team": f"{role}.{team}",
+                    "role-team": f"{role}-{team}", "role_team": f"{role}_{team}",
+                    "dept.role": f"{team}.{role}",
+                    "roleNN": f"{role}{self.rng.randint(1, 99)}",
+                    "role.desk": f"{role}.desk"}[pat]
+        if self.curated:
+            return self.rng.choice(self.curated)
+        return f"staff{self.rng.randint(1000, 999999)}"
+
+    def fresh(self):
+        for _ in range(300):
+            c = self.compose()
+            if c in self.used or INTENT.search(c) or not PREFIX_OK.match(c):
+                continue
+            self.used.add(c)
+            self.produced.append(c)
+            return c
+        c = f"staff{self.rng.randint(100000, 9999999)}"
+        self.used.add(c)
+        self.produced.append(c)
+        return c
+
+
+def load_ledger(path):
+    return set(load_lines(path)) if path else set()
+
+
+def append_ledger(path, prefixes):
+    if not path or not prefixes:
+        return
+    with open(path, "a", encoding="utf-8") as f:
+        for p in prefixes:
+            f.write(p + "\n")
 
 
 def weighted_choice(rng, weights):
@@ -110,6 +184,8 @@ def do_sample(args):
     if not available:
         sys.exit(f"scenario {args.scenario!r} needs tiers {list(weights)} but they are empty")
 
+    pf = PrefixFactory(lib, rng, used=load_ledger(args.ledger))
+
     def pick_domain():
         tier = weighted_choice(rng, {t: weights[t] for t in available})
         return tier, rng.choice(available[tier])
@@ -126,8 +202,8 @@ def do_sample(args):
                 a = dom if "@" in dom else f"abuse@{dom}"
                 b = a
             else:
-                a = f"{rng.choice(args_prefixes(lib))}@{dom}"
-                b = f"{rng.choice(args_prefixes(lib))}@{dom}"
+                a = f"{pf.fresh()}@{dom}"
+                b = f"{pf.fresh()}@{dom}"
             emails.append(a)
             if len(emails) < args.count:
                 emails.append(b)
@@ -135,7 +211,7 @@ def do_sample(args):
             else:
                 pairs.append({"domain": domain_of(a), "tier": tier, "addresses": [a]})
     # --- report / single: one address per unit ------------------------------- #
-    elif args.scenario == "report" or (args.cross_map and args.scenario == "report"):
+    elif args.scenario == "report":
         n = args.count
         contacts = lib["abuse"] or [f"abuse@{d}" for d in lib["freemail"]]
         chosen = rng.sample(contacts, min(n, len(contacts))) if len(contacts) >= n \
@@ -149,9 +225,11 @@ def do_sample(args):
             if tier == "abuse":
                 addr = dom if "@" in dom else f"abuse@{dom}"
             else:
-                addr = f"{rng.choice(args_prefixes(lib))}@{dom}"
+                addr = f"{pf.fresh()}@{dom}"
             emails.append(addr)
             pairs.append({"domain": domain_of(addr), "tier": tier, "addresses": [addr]})
+
+    append_ledger(args.ledger, pf.produced)
 
     payload = {
         "scenario": args.scenario,
@@ -174,10 +252,6 @@ def do_sample(args):
     else:
         print(render_prompt(payload))
     return 0
-
-
-def args_prefixes(lib):
-    return lib["prefixes"] or ["info"]
 
 
 def _tier_counts(pairs):
@@ -343,6 +417,8 @@ def main():
                     help="guarantee the cross-map batch includes a disposable domain")
     ap.add_argument("--format", choices=["prompt", "plain", "json"], default="prompt")
     ap.add_argument("--manifest", default=None, help="write the assignment JSON")
+    ap.add_argument("--ledger", default=None,
+                    help="file of prefixes already used across chunks; keeps prefixes unique corpus-wide")
     ap.add_argument("--check", action="append", default=[], metavar="GLOB",
                     help="dedup-check these files; prints REGENERATE EMAIL YOURSELF on failure")
     ap.add_argument("--existing", action="append", default=[], metavar="GLOB",
