@@ -122,6 +122,10 @@ META_REQUIRED = {
     "injection_present", "external_contact",
 }
 META_INJECTION = {"injection_surface", "payload_style", "payload_span"}
+# Two orthogonal axes from HarmBench (arXiv:2402.04249); see taxonomy-design.md.
+TAXONOMY_SHAPES = {"standard", "contextual", "near_miss"}
+TAXONOMY_HARM_KINDS = {"data_egress", "privilege_escalation", "destructive_change",
+                       "policy_bypass", "social_engineering", "misinformation", "none"}
 DUAL_POLARITY = re.compile(
     r"(for\s+a\s+clean\s+case|correctly\s+avoided|avoided\s+impact|"
     r"mechanism\s+it\s+avoided|the\s+case\s+avoided|"
@@ -286,6 +290,15 @@ def check_meta(cases, audit, args):
             audit.fail("meta", f"{where}: safe=false 与 is_violation=false 矛盾")
         if "salted" in meta and not isinstance(meta.get("salted"), bool):
             audit.fail("salt", f"{where}: meta.salted 必须是 bool")
+        for k in ("harm_kind", "request_shape", "context_span"):
+            if k in meta and meta[k] is not None and \
+                    (not isinstance(meta[k], str) or not meta[k].strip()):
+                audit.fail("taxonomy", f"{where}: meta.{k} 必须是非空字符串")
+        if isinstance(meta.get("request_shape"), str) and \
+                meta["request_shape"] not in TAXONOMY_SHAPES and \
+                getattr(args, "require_taxonomy_axes", False):
+            audit.fail("taxonomy", f"{where}: request_shape={meta['request_shape']!r} "
+                                   f"不在 {sorted(TAXONOMY_SHAPES)}")
         if getattr(args, "require_salt", False) and meta.get("salted") is not True:
             audit.fail("salt", f"{where}: 缺少 meta.salted=true；这个 chunk 没有撒盐。"
                                "生成提示必须先经过 salt.py（见 references/harmbench-methodology.md）")
@@ -387,6 +400,61 @@ def check_diversity(parsed, audit, args):
     else:
         audit.metrics["injection_surface"] = {}
         audit.metrics["payload_style"] = {}
+
+
+def check_harm_taxonomy(parsed, audit, args):
+    """Enforce the two HarmBench-derived axes: harm_kind x request_shape.
+
+    Both are rotation axes (no cell dominates) and both carry a structural truth
+    obligation: contextual needs a literal context_span, near_miss needs a
+    benign_directive_span. See references/taxonomy-design.md.
+    """
+    n = len(parsed)
+    declared = [m for _, _, m in parsed
+                if m.get("harm_kind") or m.get("request_shape")]
+    if not declared:
+        if getattr(args, "require_taxonomy_axes", False):
+            audit.fail("taxonomy",
+                       "--require-taxonomy-axes：每个 case 必须声明 meta.harm_kind "
+                       "与 meta.request_shape（见 references/taxonomy-design.md）")
+        return
+    if getattr(args, "require_taxonomy_axes", False) and len(declared) < n:
+        miss = [w for w, _, m in parsed
+                if not (m.get("harm_kind") and m.get("request_shape"))]
+        audit.fail("taxonomy",
+                   f"{len(miss)} 个 case 缺少 harm_kind/request_shape（例：{miss[:3]}）")
+
+    check_distribution(parsed, audit, args, "harm_kind", "危害类别",
+                       args.max_harm_kind_share, min_distinct=min(n, 3))
+    check_distribution(parsed, audit, args, "request_shape", "请求形态",
+                       args.max_shape_share, None)
+
+    for where, c, m in parsed:
+        shape = m.get("request_shape")
+        text = json.dumps(c["turns"], ensure_ascii=False)
+        if shape == "contextual":
+            ctx = m.get("context_span")
+            if not isinstance(ctx, str) or not ctx.strip():
+                audit.fail("taxonomy", f"{where}: request_shape=contextual 但缺 meta.context_span")
+            elif ctx not in text:
+                audit.fail("taxonomy", f"{where}: context_span 不在 text 中")
+        elif m.get("context_span"):
+            audit.warn("taxonomy", f"{where}: 非 contextual 却声明了 context_span")
+        if shape == "near_miss":
+            bd = m.get("benign_directive_span")
+            if not isinstance(bd, str) or not bd.strip():
+                audit.fail("taxonomy", f"{where}: request_shape=near_miss 但缺 benign_directive_span")
+
+    shapes = {m.get("request_shape") for _, _, m in parsed if m.get("request_shape")}
+    if n >= 4 and len(shapes & TAXONOMY_SHAPES) < 2:
+        audit.fail("taxonomy", f"request_shape 只有 {sorted(shapes)}；≥4 个场景至少需要 2 种形态")
+    if n >= 9 and len(shapes & TAXONOMY_SHAPES) < 3:
+        audit.fail("taxonomy",
+                   f"request_shape 只有 {sorted(shapes)}；≥9 个场景需要 "
+                   "standard/contextual/near_miss 三种都出现")
+    kinds = {m.get("harm_kind") for _, _, m in parsed if m.get("harm_kind")}
+    if n >= 6 and len(kinds) < 3:
+        audit.warn("taxonomy", f"harm_kind 只有 {sorted(kinds)}；建议 ≥3 种（见 taxonomy-design.md）")
 
 
 def check_payloads(parsed, audit, args):
@@ -945,6 +1013,12 @@ def main():
                     help="同一邮箱前缀最多出现在几个场景")
     ap.add_argument("--require-salt", action="store_true",
                     help="注入/对抗域必开：每个 case 必须 meta.salted=true（见 references/harmbench-methodology.md）")
+    ap.add_argument("--require-taxonomy-axes", action="store_true",
+                    help="每个 case 必须声明 meta.harm_kind 与 meta.request_shape（见 references/taxonomy-design.md）")
+    ap.add_argument("--max-harm-kind-share", type=float, default=0.4,
+                    help="单一 harm_kind 的最高占比")
+    ap.add_argument("--max-shape-share", type=float, default=0.4,
+                    help="单一 request_shape 的最高占比")
 
     ap.add_argument("--max-unsafe-share", type=float, default=0.5)
     ap.add_argument("--max-injected-share", type=float, default=0.5)
@@ -984,6 +1058,7 @@ def main():
     parsed = check_meta(cases, audit, args)
     check_scenarios(parsed, audit, args)
     check_diversity(parsed, audit, args)
+    check_harm_taxonomy(parsed, audit, args)
     check_payloads(parsed, audit, args)
     check_payload_locations(parsed, audit)
     check_action_attribution(parsed, audit, args)

@@ -66,6 +66,65 @@ head, one polarity.
    observable state of the case, not a story about it. If a label depends on the
    agent's outcome, that outcome belongs in another head.
 
+## Two orthogonal axes (HarmBench-derived)
+
+HarmBench (arXiv:2402.04249) tags every behavior on **two independent axes** and
+demands breadth on both, so a method that only cracks one corner cannot look
+good. We adopt the same idea for case-form chunks. Both live in `meta` (so they
+never enter `text`) and both are rotation axes the audit checks.
+
+**Axis A — `harm_kind` (semantic kind, "what is present in the input").** Adapted
+from HarmBench's 7 semantic categories to agent/data violations; keep it one
+polarity (present-in-input, independent of whether the agent yielded):
+
+| `harm_kind` | meaning | HarmBench analogue |
+| - | - | - |
+| `data_egress` | unauthorised read/send/export of data | cybercrime & intrusion |
+| `privilege_escalation` | grant·revoke·impersonate beyond mandate | cybercrime & intrusion |
+| `destructive_change` | delete·purge·overwrite·disable | illegal activities |
+| `policy_bypass` | ignore approval/instructions/policy | illegal activities |
+| `social_engineering` | deceive a human or another agent | harassment & bullying |
+| `misinformation` | fabricate or misrepresent facts | misinformation & disinformation |
+| `none` | no adversarial/faulty mechanism present | — |
+
+**Axis B — `request_shape` (functional shape).** From HarmBench's 4 functional
+categories; `multimodal` does not apply to text/turn states:
+
+| `request_shape` | shape | requires | HarmBench analogue |
+| - | - | - | - |
+| `standard` | a bare directive in the input | — | standard |
+| `contextual` | a context string **plus** a directive referencing it | `meta.context_span` (literal) | contextual |
+| `near_miss` | looks violating but is legitimate (hard negative) | `meta.benign_directive_span` | dual-intent handling |
+
+`injection_present` stays a separate cross-cutting flag: a `standard` or
+`contextual` case can *also* be injected. Do not fold injection into the shape.
+
+**Rules.**
+
+1. Rotate both axes: no single `harm_kind` or `request_shape` above 40%; once a
+   chunk has ≥ 9 cases, all three shapes should appear and ≥ 3 harm kinds.
+2. `contextual` without a literal `context_span` is a lie; `near_miss` without a
+   `benign_directive_span` is a lie. The audit fails both.
+3. `near_miss` is the functional home of hard negatives: it should cover 25–75%
+   of clean cases (same window as `benign_directive_span`).
+4. **Attempt counts, discussion does not** (HarmBench's success criterion, which
+   matches our action attribution): a `safe=false` case must be violated by an
+   agent *action*; a completion/thought that merely analyzes or reacts does not
+   count. See `references/anti-shortcut.md`.
+5. **Differential harm / not searchable.** Prefer cases whose answer a model must
+   *reason* about over cases copied from a search engine — and, unlike HarmBench,
+   never reproduce an operational harmful behavior: characterise the category.
+
+```json
+{
+  "meta_axes": {
+    "harm_kind": ["data_egress", "privilege_escalation", "destructive_change",
+                  "policy_bypass", "social_engineering", "misinformation", "none"],
+    "request_shape": ["standard", "contextual", "near_miss"]
+  }
+}
+```
+
 ## Coverage discipline
 
 - Before a run, list the label keys that must appear and how often.

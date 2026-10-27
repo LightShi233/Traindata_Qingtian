@@ -65,7 +65,10 @@ each dimension by hand:
 | unsafe justified by an action, not the domain | | |
 | email dedup (`REGENERATE EMAIL YOURSELF` clean) | | |
 | hard negatives (benign instruction-like text) share | | |
-| scenario-hash holdout written & disjoint | | |
+| `harm_kind` axis rotated (no kind > 40%, ≥3 kinds) | | two orthogonal axes |
+| `request_shape` axis rotated (standard/contextual/near_miss) | | `contextual` ⇒ literal `context_span`; `near_miss` ⇒ `benign_directive_span` |
+| salt declared on every case (`meta.salted`) | | `--require-salt` |
+| scenario-hash holdout written & disjoint | | never tune on it |
 
 ### Payload samples (for the reviewer)
 

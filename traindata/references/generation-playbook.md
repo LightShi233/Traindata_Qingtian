@@ -29,6 +29,10 @@ For each case in the batch, decide up front and put it in a small table:
   slug, a hex hash, a date-sequence).
 - `injection_present` — at most half the chunk; and if there are injected cases,
   at least one must be `safe=true` (resisted) and one `safe=false` (yielded).
+- `harm_kind` and `request_shape` — rotate both orthogonal axes
+  (`data_egress`/`privilege_escalation`/… × `standard`/`contextual`/`near_miss`);
+  `contextual` needs a literal `context_span`, `near_miss` a
+  `benign_directive_span`. See `references/taxonomy-design.md`.
 - `injection_surface` and `payload_style` — rotate across body / subject /
   status / footer / description / notes, and across wording registers.
 - `payload_span` — write it yourself if you can, so the model copies a plan
