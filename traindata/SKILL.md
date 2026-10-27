@@ -147,18 +147,23 @@ draw a locked email batch + write the diversity plan (e.g. 10 cases)
 
 Tips that make this work in practice:
 
-- **Author each chunk in YAML, then convert.** Ask for one `.yaml` file per
-  chunk (a list of cases, or `---`-separated documents). In YAML the model does
-  not hand-escape quotes: `action:` is a mapping, long `content:` is a `|`
-  block. Convert and validate in one step:
+- **Author each chunk in YAML, into an allocated slot.** Run
+  `data_writer.py allocate --count N` first; the model writes one `.yaml` file
+  per chunk (a list of cases, or `---`-separated documents) at the printed
+  `data/inbox/chunk_NNNN.yaml` path, then `data_writer.py write` converts and
+  validates it. In YAML the model does not hand-escape quotes: `action:` is a
+  mapping, long `content:` is a `|` block.
 
   ```bash
-  python3 traindata/scripts/yaml_to_jsonl.py --in 'cases_*.yaml' \
-    --taxonomy taxonomy.json --expand --out chunk_0001.jsonl
+  python3 traindata/scripts/data_writer.py allocate --count 10
+  python3 traindata/scripts/data_writer.py write --round <id> \
+    --name chunk_0003 --in data/inbox/chunk_0003.yaml --taxonomy taxonomy.json
   ```
 
   Conversion is fail-closed — any malformed case writes nothing. Never hand-fix
-  the emitted JSONL; fix the YAML and reconvert.
+  the emitted JSONL; fix the YAML and reconvert. For a single ad-hoc file,
+  `yaml_to_jsonl.py` still works, but the round workflow is the default because
+  it owns naming, the round manifest, and the pollution check.
 - **Sample the addresses first**, then put the locked list in the prompt:
   `python3 traindata/scripts/sample_emails.py --scenario <safe|violation|injection> \
   --count <n> --cross-map --manifest email_assignment.json --ledger prefix_ledger.txt`.
@@ -328,6 +333,49 @@ chomping, inline `[...]`/`{...}`, comments, multiple documents. Quote any value
 that must stay a string (`"0"`, `"000101"`, ids). Plain `yes`/`no` stay strings;
 only `true`/`false` become booleans.
 
+### Round workflow: allocate → write → merge → check
+
+`scripts/data_writer.py` is the **only** writer. Do not invent a generator, do
+not write JSONL by hand, do not choose your own filenames.
+
+```bash
+# 1. reserve names for this round; it prints the exact YAML slot for each
+python3 traindata/scripts/data_writer.py allocate --count 10 [--worker sub-3]
+#    -> round: r-2026...   chunk_0003  yaml=data/inbox/chunk_0003.yaml
+
+# 2. write the model's YAML to that exact path, then convert in place
+python3 traindata/scripts/data_writer.py write --round r-2026... \
+  --name chunk_0003 --in data/inbox/chunk_0003.yaml --taxonomy data/taxonomy.json
+
+# 3. merge ONLY this round's written chunks (never a glob over all chunks)
+python3 traindata/scripts/data_writer.py merge --round r-2026... \
+  --taxonomy data/taxonomy.json
+
+# 4. fail the round if it left anything behind
+python3 traindata/scripts/data_writer.py check --round r-2026... --strict
+```
+
+What the tool enforces:
+
+- **All paths stay under `./data`.** Anything outside is rejected.
+- **Names are allocated, not guessed.** `chunk_<4+ digits>`; `write` requires
+  the YAML to be at the exact slot from `allocate` and refuses unallocated
+  names.
+- **No overwrites.** An existing `chunks/chunk_NNNN.jsonl` is never replaced;
+  allocate a fresh name to redo a chunk.
+- **Round-scoped merge.** `merge` reads the round manifest only, so another
+  round's chunks or a hand-placed file can never slip in.
+- **No pollution.** `check` fails on unallocated chunk files, temp/backup files
+  (`.tmp-*`, `*.tmp`, `*.bak`, `*.swp`, `__pycache__`, …), and any `.py` under
+  `data/` — i.e. a model that tried to write its own `author.py`.
+- Round manifests live in `data/rounds/<round>.json`; sources in
+  `data/inbox/`; accepted chunks in `data/chunks/`.
+
+If `check` reports a stray file, **delete it or move it out of the round**;
+never commit it. The tool writes each output through a `.tmp-*` file and an
+atomic rename, so a leftover `.tmp-*` means a crash — remove it, don't commit
+it. There is no sanctioned place for scratch files.
+
 ## Wall-clock budget
 
 Every gate and the converter take `--timeout SECONDS` (default `0` = unlimited).
@@ -414,6 +462,15 @@ are decoded with replacement instead of crashing. Outputs are written atomically
 16. **Every run has a wall-clock budget.** Pass `--timeout` to the converter and
     both gates. Exit 3 means "not accepted, retry smaller" — not "raise the
     limit". A hung gate is a failed gate.
+17. **Never write a generator.** Do not create a new `.py` script (`author.py`,
+    `gen.py`, a "small helper") to produce data — the tooling already exists.
+    The model's only output is YAML; `data_writer.py` converts, names, merges
+    and checks it. `data_writer.py check` fails on any `.py` under `data/`.
+18. **Stay inside the round and inside `./data`.** Use only names from
+    `allocate`, write only to the allocated YAML slot, merge only via
+    `data_writer.py merge` (this round's manifest, never a glob), and commit no
+    temp/backup files. Run `data_writer.py check --round <id> --strict` before
+    handing the round off.
 
 ## Reference files
 
@@ -437,10 +494,16 @@ the repository root.
   `known_blocklist.txt`, `abuse_contacts.txt`; compositional prefix vocab
   `names_first.txt` / `names_last.txt` / `roles.txt`; `prefixes.txt` (curated);
   `email_library.json` / `prefix_vocab.json`; raw sources under `sources/`.
+- `scripts/data_writer.py` — the fixed writer: `allocate` (next names + YAML
+  slots), `write` (validate + convert into an allocated slot), `merge` (this
+  round only), `check` (stray chunks, temp files, model-authored scripts).
 - `scripts/yaml_to_jsonl.py` — YAML → validated case-form JSONL / records;
   normalises nested `action`/`content`, fail-closed, atomic writes.
 - `scripts/dataloader.py` — shared tolerant loader: JSONL/array/fence/BOM
   handling, the built-in YAML subset reader, atomic writes, and `Deadline`.
+- `references/state-formats.md` — also carries the **measured** ruhui length
+  budget: ~0.26 tokens/char, ~136-token head, so a 1024-token window keeps
+  ~3.2k characters of state before `build_sequence` truncates the tail.
 - `scripts/validate_and_integrate.py` — runnable validator/integrator, used in place.
 - `scripts/audit_diversity.py` — runnable anti-shortcut / diversity gate.
 - `scripts/sample_emails.py` — locked, tiered, cross-mapped batches + prefix
@@ -462,6 +525,14 @@ Commands assume the working directory is the repository root and the skill is
 installed at `./traindata/`.
 
 ```bash
+# round workflow: allocate -> write -> merge (round only) -> check
+python3 traindata/scripts/data_writer.py allocate --count 10
+python3 traindata/scripts/data_writer.py write --round <id> \
+  --name chunk_0003 --in data/inbox/chunk_0003.yaml --taxonomy taxonomy.json
+python3 traindata/scripts/data_writer.py merge --round <id> --taxonomy taxonomy.json
+python3 traindata/scripts/data_writer.py check --round <id> --strict
+
+# single-file conversion (ad hoc; the round workflow above is the default)
 # convert model-authored YAML into a validated chunk (fail-closed, atomic)
 python3 traindata/scripts/yaml_to_jsonl.py --in 'cases_*.yaml' \
   --taxonomy taxonomy.json --expand --out chunk_0001.jsonl --timeout 300
