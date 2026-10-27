@@ -15,3 +15,51 @@ GPL-3.0. See [LICENSE](LICENSE).
 
 Because trying to keep an AI safety guardrail closed-source is like trying to
 put out a fire with a sealed box of fire extinguishers. (也因为我白嫖了 CCNC 的拼音库，被传染了，索性大家一起开源吧)。
+
+## Acknowledgements
+
+This project stands on other people's work. Everything below is used either as
+data welded into `traindata/assets/email_library/`, as a build-time tool, or as
+methodology. We are grateful to all of them; upstream licences are kept beside
+the data under `traindata/assets/email_library/sources/`.
+
+### Data sources
+
+| project | used for | licence |
+| - | - | - |
+| [CCNC — Chinese Name Corpus](https://github.com/jaaack-wang/ccnc) | Chinese given/family names, romanised to pinyin for the prefix vocabulary | GPL-3.0 (`sources/ccnc.LICENSE`) |
+| [names.io](https://names.io) | first / family name vocabulary | Apache-2.0 (`sources/names.io.LICENSE`) |
+| [arnt/freemail](https://github.com/arnt/freemail) | list of normal free-mail provider domains (`freemail.txt`, `freemail_abuse.txt`) | see `sources/freemail_README.md` |
+| disposable/toxic domain aggregate (user-supplied) | disposable/toxic domains (`known_blocklist.txt`) | see below |
+
+The disposable/toxic list is an auto-generated aggregate of these public lists
+(as recorded in the file header):
+
+- [disposable/disposable-email-domains](https://github.com/disposable/disposable-email-domains) — `domains.txt`
+- [disposable-email-domains/disposable-email-domains](https://github.com/disposable-email-domains/disposable-email-domains) — `disposable_email_blocklist.conf`
+- [7c/fakefilter](https://github.com/7c/fakefilter) — `txt/data.txt`
+- [wesbos/burner-email-providers](https://github.com/wesbos/burner-email-providers) — `emails.txt`
+- [Stop Forum Spam](https://www.stopforumspam.com/downloads/) — `toxic_domains_whole{,_filtered}.txt`
+- [deviceandbrowserinfo.com](https://deviceandbrowserinfo.com/api/emails/disposable) — disposable email API
+- [Propaganistas/Laravel-Disposable-Email](https://github.com/Propaganistas/Laravel-Disposable-Email) — `domains.json`
+- [infiniteloopltd/TempEmailDomainMXRecords](https://github.com/infiniteloopltd/TempEmailDomainMXRecords) — `TempEmailDomainMXRecords.csv`
+
+Additional given-name / family-name / role seed lists under
+`sources/names_*_0*.txt` and `sources/roles_*_0*.txt` were curated for this skill.
+
+### Build-time tools
+
+| tool | used for | licence |
+| - | - | - |
+| [pypinyin](https://github.com/mozillazg/python-pinyin) | romanising the CCNC names into ASCII pinyin (`build_ccnc_sources.py`; run via a temporary `nix-shell -p python3Packages.pypinyin`) | MIT |
+
+### Methodology
+
+| project | used for | licence |
+| - | - | - |
+| [HarmBench](https://github.com/centerforaisafety/HarmBench) — Mazeika et al., *HarmBench: A Standardized Evaluation Framework for Automated Red Teaming and Robust Refusal*, [arXiv:2402.04249](https://arxiv.org/abs/2402.04249) | behaviour taxonomy, evaluation pipeline, robust-metric design, and the "attempt counts, discussion does not" criterion adapted into `audit_diversity.py` and `references/harmbench-methodology.md` | MIT (`HarmBench/LICENSE`) |
+
+HarmBench also discusses **AdvBench** (Zou et al., *Universal and Transferable
+Adversarial Attacks on Aligned Language Models*, arXiv:2307.15043) and the
+**TDC 2023 Red Teaming Track** (Mazeika et al.), which informed the methodology
+summary; we cite them here rather than vendor their data.
