@@ -60,9 +60,12 @@ ASR(y,g,f) = (1/N) · Σ c(f_T(xᵢ), y)
   | contextual | 100 | a **context string + a behavior referencing it** | realistic, differentially-harmful requests |
   | multimodal | 110 | an **image + a behavior referencing it** | attacks through non-text input |
 
-**Curated splits:** validation 100 / test 410; attacks and defenses must **not**
-tune on the test set *or on any semantically identical behavior* — the same
-"scenario-hash holdout" idea our audit enforces.
+**Curated splits:** the paper states validation 100 / test 410. In the checkout we
+measured the **text** files as **80 val / 319 test** over 400 text behaviors
+(standard 41+159=200, contextual 19+81=100, copyright 20+79≈100), with the 110
+multimodal behaviors provided as a single unsplit set — either way, attacks and
+defenses must **not** tune on the test set *or on any semantically identical
+behavior*; the same "scenario-hash holdout" idea our audit enforces.
 
 **Curation criteria** (two ideas directly relevant here):
 
