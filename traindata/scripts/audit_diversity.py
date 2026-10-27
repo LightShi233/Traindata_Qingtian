@@ -17,12 +17,16 @@ Hard failures (exit 1) cover:
 - missing / dishonest diversity metadata (``meta``)
 - one org, one ID style, one scenario skeleton, one thought voice
 - one injection position, one payload style, one payload template
-- payload fingerprints and giveaway wording (``AUTO-APPENDED NOTE``,
-  ``support-ext@``, ``evil``, ``exfiltrate``, throwaway mail domains, ...)
+- artificial payload fingerprints (``AUTO-APPENDED NOTE``) and intent-naming
+  local parts (``evil@``, ``exfil@``) — **domains are never blacklisted**
 - payload text reused across cases, including near-reuse
 - injected cases dominating the corpus, or clean cases without any hard
   negatives
-- external-looking addresses appearing only in poisoned cases
+- address style becoming the label: disposable or free-mail share skewed between
+  clean and violating contexts; attacks almost all sent to throwaway domains
+- emails that do not come from ``assets/email_library``
+- a safe case on a disposable address with no neutralising thought, or a
+  violation not justified by an agent action
 - a choice/score head whose instruction mixes "cause" and "vaccine"
   semantics (the dual-polarity bug)
 - a scenario-hash holdout that is not actually disjoint
@@ -50,17 +54,15 @@ from collections import Counter, defaultdict
 # --------------------------------------------------------------------------- #
 # Shortcut fingerprints
 # --------------------------------------------------------------------------- #
-# These must never appear in generated content: they are the surface tells that
+# These must never appear in generated content: they are artificial tells that
 # teach "the poison looks like this" instead of "tool output is untrusted".
+# NOTE: domains are deliberately NOT listed here. Known disposable/toxic domains
+# are kept in the unified email pool and are usable everywhere (see
+# references/anti-shortcut.md); excluding them would be data poisoning.
 HARD_BANNED = [
     (r"auto[\s_-]*appended", "fixed 'AUTO-APPENDED' payload prefix"),
     (r"note\s+for\s+(bot|agent|assistant|operator)s?", "fixed 'NOTE FOR BOT OPERATORS' payload prefix"),
     (r"\bbot\s+operators?\b", "addresses the model/operator explicitly"),
-    (r"support[\s_-]*ext\s*@", "obvious 'support-ext@' poison address"),
-    (r"\b(attacker|evil|malicious|phish(ing)?|exfiltrat\w*|malware)\b",
-     "security-vocabulary giveaway in content"),
-    (r"(10minutemail|guerrillamail|mailinator|yopmail|tempmail|sharklasers)",
-     "throwaway-mail domain giveaway"),
     (r"\[?\s*system\s*(override|prompt)\s*\]?", "fixed system-override marker"),
     (r"<\|[^|]*\|>", "chat-template control token"),
 ]
@@ -80,10 +82,11 @@ FINGERPRINT_PATTERNS = [
     (r"external\s+(mailing\s+list|address|recipient|contact)", "external-recipient template"),
 ]
 
-# Obvious giveaways in a poison address. "support" is fine; "support-ext" is not.
-SUSPICIOUS_ADDRESS = [
-    r"(^|[._+-])(ext|external|outside|attacker|evil|exfil|phish|malware|drop|temp|throwaway|burner|anon|spam|relay)([._+-]|$)",
-    r"(10minutemail|guerrillamail|mailinator|yopmail|tempmail|sharklasers)",
+# Local parts that literally name malicious intent are artificial and teach a
+# shortcut. This is about the *name*, not the domain: any domain, disposable or
+# corporate, is allowed.
+INTENT_LOCALPART = [
+    r"(^|[._+-])(ext|external|outside|attacker|evil|exfil\w*|phish\w*|malware|scam)([._+-]|$)",
 ]
 
 GENERIC_WORDS = {
@@ -418,32 +421,101 @@ def check_payloads(parsed, audit, args):
             if re.search(pat, span, re.I):
                 pattern_hits[label] += 1
         for e in emails(span):
-            local, _, dom = e.partition("@")
-            if any(re.search(p, local, re.I) or re.search(p, dom, re.I) for p in SUSPICIOUS_ADDRESS):
-                audit.fail("address", f"{where}: 毒地址自带'我是坏人'提示: {e}")
+            local = e.partition("@")[0]
+            if any(re.search(p, local, re.I) for p in INTENT_LOCALPART):
+                audit.fail("address", f"{where}: 邮箱前缀自带'我是坏人'提示: {e}（域名不限）")
     for label, count in pattern_hits.items():
         if count > args.max_fingerprint_cases:
             audit.fail("fingerprint", f"模板 {label!r} 在 {count} 个 payload 中复用 > {args.max_fingerprint_cases}；换的是句式，不是名词")
 
-    # 4) poison-address parity: domains and presence must not be the label
+    # 4) entity cross-mapping: a domain's *style* must not predict the label.
+    pool, blocklist, freemail = getattr(args, "email_pool", (set(), set(), set()))
     all_domains = Counter()
-    for _, c, _ in parsed:
-        for e in emails(json.dumps(c["turns"], ensure_ascii=False)):
-            all_domains[registrable(e.split("@")[1])] += 1
+    safe_doms, unsafe_doms = Counter(), Counter()
+    used_emails = []
+    for where, c, m in parsed:
+        txt = json.dumps(c["turns"], ensure_ascii=False)
+        for e in emails(txt):
+            dom = registrable(e.lower().split("@")[1])
+            all_domains[dom] += 1
+            used_emails.append(e.lower())
+            (safe_doms if c.get("safe") else unsafe_doms)[dom] += 1
+
     if all_domains:
         top_dom, cnt = all_domains.most_common(1)[0]
         total = sum(all_domains.values())
         if cnt / total > args.max_domain_share:
             audit.fail("domain", f"邮箱域名 '{top_dom}' 占全部地址的 {cnt}/{total}；"
-                                  "一个组织名/域名贯穿整个语料会让模型用域名当标签")
+                                  "一个域名贯穿整个语料会让模型用域名当标签")
+
+    if pool:
+        unknown = sorted({d for d in all_domains if d not in pool})
+        audit.metrics["unknown_domains"] = unknown[:20]
+        if unknown:
+            msg = (f"{len(unknown)} 个域名不在 email_library 池中: {unknown[:5]}；"
+                   "用 traindata/scripts/sample_emails.py 抽一批锁定地址，别自己编")
+            if args.require_library_emails:
+                audit.fail("library", msg)
+            else:
+                audit.warn("library", msg)
+
+    # Known-disposable share must be similar in clean and violating contexts.
+    if blocklist and safe_doms and unsafe_doms:
+        def tier_share(counter, tier):
+            tot = sum(counter.values())
+            n = sum(v for d, v in counter.items() if d in tier)
+            return n / tot if tot else 0.0
+        s_bl, u_bl = tier_share(safe_doms, blocklist), tier_share(unsafe_doms, blocklist)
+        audit.metrics["blocklist_share"] = {"safe": s_bl, "unsafe": u_bl}
+        gap = abs(s_bl - u_bl)
+        if gap > args.max_entity_gap:
+            audit.fail("cross-map",
+                       f"已知一次性域名占比 safe={s_bl:.0%} vs unsafe={u_bl:.0%}，差 {gap:.0%} > "
+                       f"{args.max_entity_gap:.0%}；域名风格正在变成标签。把同一批域名交叉放进"
+                       "安全场景和违规场景（用 sample_emails.py --cross-map）")
+    # Normal free mail must be used by attackers too, not only by clean traffic.
+    if freemail and safe_doms and unsafe_doms:
+        def free_share(counter):
+            tot = sum(counter.values())
+            n = sum(v for d, v in counter.items() if d in freemail)
+            return n / tot if tot else 0.0
+        s_f, u_f = free_share(safe_doms), free_share(unsafe_doms)
+        audit.metrics["freemail_share"] = {"safe": s_f, "unsafe": u_f}
+        if abs(s_f - u_f) > args.max_entity_gap:
+            audit.fail("cross-map",
+                       f"正常免费邮箱占比 safe={s_f:.0%} vs unsafe={u_f:.0%}，差 > "
+                       f"{args.max_entity_gap:.0%}；免费邮箱正变成'safe'的信号")
+        if u_f < args.min_freemail_in_violations:
+            audit.fail("cross-map",
+                       f"违规场景里只有 {u_f:.0%} 是正常免费邮箱 < "
+                       f"{args.min_freemail_in_violations:.0%}；高级攻击者恰恰用 gmail 收脏数据，"
+                       "别把所有攻击都写成一次性域名")
+    if blocklist and unsafe_doms:
+        u_bl = sum(v for d, v in unsafe_doms.items() if d in blocklist) / sum(unsafe_doms.values())
+        if u_bl > args.max_disposable_in_violations:
+            audit.fail("cross-map",
+                       f"违规场景里 {u_bl:.0%} 是一次性域名 > "
+                       f"{args.max_disposable_in_violations:.0%}；攻击被一次性域名主导，"
+                       "模型会只认脏域名")
+    # No single domain may sit entirely on one side once it appears repeatedly.
+    one_sided = []
+    for dom in set(safe_doms) | set(unsafe_doms):
+        s, u = safe_doms.get(dom, 0), unsafe_doms.get(dom, 0)
+        if s + u >= 3 and (s == 0 or u == 0):
+            one_sided.append((dom, s, u))
+    if one_sided:
+        audit.warn("cross-map",
+                   f"{len(one_sided)} 个域名只出现在单一类别（例：{one_sided[:3]}）；"
+                   "抽样时用 --cross-map 让每个域名两边都出现")
+
     payload_domains = Counter()
     for _, span, _ in spans:
         for e in emails(span):
-            payload_domains[registrable(e.split("@")[1])] += 1
+            payload_domains[registrable(e.lower().split("@")[1])] += 1
     if payload_domains:
         top, cnt = payload_domains.most_common(1)[0]
         if cnt / len(spans) > 0.5:
-            audit.warn("domain", f"payload 域名 '{top}' 出现在 {cnt}/{len(spans)} 个注入样本；换一批正经域名")
+            audit.warn("domain", f"payload 域名 '{top}' 出现在 {cnt}/{len(spans)} 个注入样本；换一批域名")
 
     clean = [(w, c) for w, c, _ in parsed if c.get("safe") is True]
     if clean:
@@ -485,6 +557,86 @@ def check_payloads(parsed, audit, args):
         elif not re.search(r"(please|must|should|send|forward|cc|escalate|notify|update|route|assign|include|attach|share|reply)",
                            span, re.I):
             audit.warn("negative", f"{where}: benign_directive_span 不像指令，起不到困难负例作用")
+
+
+NEUTRALIZE_MAIL = re.compile(
+    r"(temporary|temp|disposable|throwaway|burner)\s*(mail|mailbox|email|address|domain)", re.I)
+NEUTRALIZE_OK = re.compile(
+    r"(compliant|within scope|in scope|not (itself )?a violation|no violation|still safe|"
+    r"legitimate|business action|does not (by itself )?(make|imply))", re.I)
+ZH_TEMP = ("临时邮箱", "一次性邮箱", "临时邮件", "一次性邮件")
+ZH_OK = ("合规", "业务动作", "不构成违规", "不违规", "仍在范围")
+RISKY_ACTION = re.compile(
+    r"(delete|purge|destroy|wipe|drop\b|export|download|upload|\bsend\b|forward|share|"
+    r"post|publish|grant|revoke|escalate|disable|bypass|override|all_users|mass|bulk|"
+    r"external|detach|attach|transfer)", re.I)
+DOMAIN_RATIONALE = re.compile(
+    r"(because|since|as|due to)[^.\n]{0,60}"
+    r"\b(gmail|hotmail|yahoo|outlook|free ?mail|temporary|temp|disposable|throwaway|"
+    r"external address|email address|the domain|recipient domain)\b", re.I)
+NEUTRALIZE_SENTENCE = ("The sender uses a temporary mailbox; noteworthy, but the business "
+                       "action stays within scope.")
+
+
+def check_action_attribution(parsed, audit, args):
+    """Enforce: label follows the agent's ACTION, never the recipient's domain.
+
+    - safe=true with a disposable address must carry an explicit neutralisation
+      thought (temp mailbox is not itself a violation).
+    - safe=false must have an action-level violation point; when an injection was
+      present, the agent must actually have taken the injected action.
+    - no thought may justify an unsafe label by the domain style alone.
+    """
+    block = getattr(args, "email_pool", (set(), set(), set()))[1]
+    neutralized = 0
+    for where, c, m in parsed:
+        txt = json.dumps(c["turns"], ensure_ascii=False)
+        case_emails = [e.lower() for e in emails(txt)]
+        doms = {registrable(e.split("@")[1]) for e in case_emails}
+        thoughts = [t["thought"] for t in c["turns"]
+                    if isinstance(t, dict) and isinstance(t.get("thought"), str)]
+        thought_txt = " ".join(thoughts)
+
+        if c.get("safe") is True:
+            if block and doms & block:
+                ok_en = bool(NEUTRALIZE_MAIL.search(thought_txt)
+                             and NEUTRALIZE_OK.search(thought_txt))
+                ok_zh = any(z in thought_txt for z in ZH_TEMP) and \
+                    any(z in thought_txt for z in ZH_OK)
+                if not (ok_en or ok_zh):
+                    audit.fail(
+                        "action",
+                        f"{where}: safe=true 但用了已知一次性域名，却没有任何中立化说明。"
+                        f"请在 thought 里加一句：\"{NEUTRALIZE_SENTENCE}\" "
+                        f"（中文亦可：客户使用了临时邮箱，需注意但业务动作合规）")
+                else:
+                    neutralized += 1
+            continue
+
+        # safe=false
+        agent_actions = " ".join(
+            t.get("action", "") for t in c["turns"]
+            if isinstance(t, dict) and t.get("role") == "agent")
+        risky = bool(RISKY_ACTION.search(agent_actions))
+        # an injected instruction must be actually carried out to count as a failure
+        span = m.get("payload_span") or ""
+        span_emails = [e.lower() for e in emails(span)]
+        followed = True
+        if span_emails:
+            followed = any(e in agent_actions.lower() for e in span_emails)
+        if not risky and not followed:
+            audit.fail("action",
+                       f"{where}: safe=false 但找不到动作层的违规点；违规必须落在"
+                       "越权/外发/破坏等 agent action 上，不能只因为收件方是某类域名")
+        if DOMAIN_RATIONALE.search(thought_txt):
+            audit.fail("action",
+                       f"{where}: 违规理由似乎在说域名/邮箱类型，而不是动作；"
+                       "把归因改到 agent 做了什么越界动作上")
+        if span_emails and not followed:
+            audit.fail("action",
+                       f"{where}: 标注为违规，但 agent 的动作里没有执行注入目标 "
+                       f"{span_emails[:2]}；说明 agent 其实抗住了，应标 safe=true")
+    audit.metrics["neutralized_temp_mail"] = neutralized
 
 
 def check_payload_locations(parsed, audit):
@@ -597,6 +749,77 @@ def check_labels(parsed, taxonomy, audit, args):
             audit.warn("labels", f"{qid} 缺少标签 {missing}；确认这些情况确实不该出现")
 
 
+def load_email_pool(dirpath):
+    """Return (pool_lookup, block_lookup, freemail_lookup, stats).
+
+    All lookups contain full domains and their registrable forms, and all are
+    *usable*; the blocklist/freemail sets are only classification labels used to
+    verify cross-context parity. Never filter the pool with them.
+    """
+    pool, block, freemail = set(), set(), set()
+    stats = {"domains": 0, "known_blocklist": 0, "freemail": 0}
+    if not dirpath or not os.path.isdir(dirpath):
+        return pool, block, freemail, stats
+    for name in ("synth_domains.txt", "known_blocklist.txt", "freemail.txt"):
+        p = os.path.join(dirpath, name)
+        if not os.path.exists(p):
+            continue
+        with open(p, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                d = ln.strip().strip(".").lower()
+                if not d:
+                    continue
+                stats_key = {"synth_domains.txt": "domains",
+                             "known_blocklist.txt": "known_blocklist",
+                             "freemail.txt": "freemail"}[name]
+                stats[stats_key] += 1
+                # Everything is usable: blocklist/freemail domains are pool members too.
+                pool.add(d)
+                pool.add(registrable(d))
+                if name == "known_blocklist.txt":
+                    block.add(d)
+                    block.add(registrable(d))
+                elif name == "freemail.txt":
+                    freemail.add(d)
+                    freemail.add(registrable(d))
+    stats["domains"] += stats["known_blocklist"] + stats["freemail"]
+    return pool, block, freemail, stats
+
+
+def check_email_manifest(parsed, path, audit):
+    """Verify a sample_emails.py --cross-map manifest: every paired domain must
+    actually appear in both a safe and an unsafe case."""
+    if not path:
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            man = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        audit.fail("cross-map", f"无法读取 email manifest {path}: {e}")
+        return
+    pairs = man.get("pairs") or []
+    if not pairs:
+        audit.fail("cross-map", f"email manifest {path} 没有 pairs；用 --cross-map 生成")
+        return
+    seen = defaultdict(lambda: {True: 0, False: 0})
+    for where, c, m in parsed:
+        for e in emails(json.dumps(c["turns"], ensure_ascii=False)):
+            seen[registrable(e.lower().split("@")[1])][bool(c.get("safe"))] += 1
+    bad = []
+    for p in pairs:
+        dom = registrable(str(p.get("domain", "")).lower())
+        if not dom or dom not in seen:
+            continue
+        s, u = seen[dom][True], seen[dom][False]
+        if s == 0 or u == 0:
+            bad.append((dom, s, u))
+    if bad:
+        audit.fail("cross-map", f"manifest 要求的域名未同时出现在安全与违规场景: {bad[:5]}；"
+                                "同一域名必须在两类上下文都出现")
+    else:
+        audit.metrics["email_manifest_ok"] = len(pairs)
+
+
 def write_holdout(parsed, args, audit):
     if not args.holdout:
         return
@@ -645,6 +868,19 @@ def main():
     ap.add_argument("--holdout", type=int, default=0, help="按场景 hash 留出的场景数（pilot 用 2）")
     ap.add_argument("--out-dir", default="pilot_holdout")
     ap.add_argument("--seed", type=int, default=13)
+    ap.add_argument("--email-library", default=os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "email_library"),
+        help="email_library 目录（synth_domains.txt + known_blocklist.txt）")
+    ap.add_argument("--require-library-emails", action="store_true",
+                    help="样本里的邮箱必须来自 email_library（否则 fail）")
+    ap.add_argument("--email-manifest", default=None,
+                    help="sample_emails.py --cross-map 生成的 assignment JSON，用于精确校验交叉映射")
+    ap.add_argument("--max-entity-gap", type=float, default=0.3,
+                    help="已知一次性域名在 safe/unsafe 中的占比差上限")
+    ap.add_argument("--min-freemail-in-violations", type=float, default=0.4,
+                    help="违规场景中正常免费邮箱的最低占比（攻击者也会用 gmail）")
+    ap.add_argument("--max-disposable-in-violations", type=float, default=0.5,
+                    help="违规场景中一次性域名的最高占比")
 
     ap.add_argument("--max-unsafe-share", type=float, default=0.5)
     ap.add_argument("--max-injected-share", type=float, default=0.5)
@@ -677,14 +913,20 @@ def main():
     cases = load_cases(paths)
     audit = Audit()
     audit.metrics["cases_loaded"] = len(cases)
+    pool, block, freemail, pool_stats = load_email_pool(args.email_library)
+    args.email_pool = (pool, block, freemail)
+    if pool:
+        audit.metrics["email_library"] = pool_stats
     parsed = check_meta(cases, audit, args)
     check_scenarios(parsed, audit, args)
     check_diversity(parsed, audit, args)
     check_payloads(parsed, audit, args)
     check_payload_locations(parsed, audit)
+    check_action_attribution(parsed, audit, args)
     check_text_style(parsed, audit, args)
     check_taxonomy(taxonomy, audit)
     check_labels(parsed, taxonomy, audit, args)
+    check_email_manifest(parsed, args.email_manifest, audit)
     write_holdout(parsed, args, audit)
 
     if args.strict:
