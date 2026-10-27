@@ -342,6 +342,8 @@ the repository root.
   ledger + dedup check.
 - `scripts/salt.py` — inoculate a generation prompt with the salt block + needle,
   and verify every case declared `meta.salted`.
+- `scripts/salt_harmbench.py` — build a safety-salted mirror of a HarmBench
+  checkout so the reference material is read as inert data.
 - `scripts/obfuscators.py` — deterministic host-level / linguistic payload
   obfuscation primitives (the model never hand-writes base64/hex/homoglyphs).
 - `scripts/build_email_library.py` — rebuilds the welded domain pool (provenance).

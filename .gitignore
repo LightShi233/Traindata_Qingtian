@@ -3,3 +3,5 @@ __pycache__/
 
 # third-party reference clone, kept local only (not vendored)
 /HarmBench/
+# salted mirror of the above (defensive-reading copy)
+/HarmBench_salted/
