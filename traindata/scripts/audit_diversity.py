@@ -31,6 +31,8 @@ Hard failures (exit 1) cover:
 - a choice/score head whose instruction mixes "cause" and "vaccine"
   semantics (the dual-polarity bug)
 - a scenario-hash holdout that is not actually disjoint
+- an unsalted chunk when ``--require-salt`` is set (see
+  ``references/harmbench-methodology.md``)
 
 Usage
 -----
@@ -282,6 +284,11 @@ def check_meta(cases, audit, args):
             audit.fail("meta", f"{where}: safe=true 与 is_violation=true 矛盾")
         if c.get("safe") is False and "is_violation" in c and c["is_violation"] is not True:
             audit.fail("meta", f"{where}: safe=false 与 is_violation=false 矛盾")
+        if "salted" in meta and not isinstance(meta.get("salted"), bool):
+            audit.fail("salt", f"{where}: meta.salted 必须是 bool")
+        if getattr(args, "require_salt", False) and meta.get("salted") is not True:
+            audit.fail("salt", f"{where}: 缺少 meta.salted=true；这个 chunk 没有撒盐。"
+                               "生成提示必须先经过 salt.py（见 references/harmbench-methodology.md）")
         parsed.append((where, c, meta))
     return parsed
 
@@ -936,6 +943,8 @@ def main():
                     help="违规场景中一次性域名的最高占比")
     ap.add_argument("--max-prefix-reuse", type=int, default=2,
                     help="同一邮箱前缀最多出现在几个场景")
+    ap.add_argument("--require-salt", action="store_true",
+                    help="注入/对抗域必开：每个 case 必须 meta.salted=true（见 references/harmbench-methodology.md）")
 
     ap.add_argument("--max-unsafe-share", type=float, default=0.5)
     ap.add_argument("--max-injected-share", type=float, default=0.5)
