@@ -125,3 +125,34 @@ Every case-form chunk carries a `meta` object (not part of `text`, so it never
 enters training). It records the diversity plan so the audit can verify it. The
 full field list and the enforced budget are in `references/anti-shortcut.md`; the
 schema-agnostic validator ignores it, the diversity audit requires it.
+## The ruhui length budget (measured)
+
+`ruhui`'s `build_sequence` windows the state at `max_len` tokens (1024 in the
+shipped `rl_agent_config.json`) and, with the default `truncate_left=False`,
+keeps `state_ids[:room]` — it **drops the tail of the trajectory**. In a
+violation case the decisive action is usually late, so an over-long state can
+silently strip the evidence the label depends on. The record still validates;
+only the model stops seeing why the label is what it is.
+
+Measured against the real tokenizer (`ruhui-finetuned/tokenizer`, mmBERT):
+
+| state | tokens | chars | seq @ max_len=1024 | result |
+| - | - | - | - | - |
+| 1 turn-block | 172 | 650 | 309 | full |
+| 2 turn-blocks | 343 | 1300 | 480 | full |
+| 4 turn-blocks | 685 | 2600 | 822 | full |
+| 6 turn-blocks | 1027 | 3900 | 1024 | **tail truncated, 140 tokens lost** |
+
+Practical numbers:
+
+- The head (type + instruction + options) costs ~136 tokens at
+  `head_max_len=256`, leaving ~887 tokens for the state.
+- A turn-list JSON state runs about **0.26 tokens per character**, so ~3.4k
+  characters is the hard ceiling and ~3.2k is a safe target.
+- `--ruhui-max-len` is enabled by default in `data_writer.py write/merge` and
+  fails a chunk whose `text` exceeds `max_len * 3.2` characters. Pass
+  `--ruhui-max-len 0` only when you are targeting a different window.
+
+Keep trajectories to 2–4 turns of real content. Padding a case with repeated
+filler to look richer pushes it into the truncation zone while adding nothing
+the model can learn from.
