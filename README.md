@@ -27,6 +27,7 @@ the data under `traindata/assets/email_library/sources/`.
 
 | project | used for | licence |
 | - | - | - |
+| [ATBench](https://huggingface.co/datasets/AI45Research/ATBench) (AI45Research) | the base agent-trajectory corpus the original method builds on; pilots blend into it (see `references/anti-shortcut.md`) | Apache-2.0 |
 | [CCNC — Chinese Name Corpus](https://github.com/jaaack-wang/ccnc) | Chinese given/family names, romanised to pinyin for the prefix vocabulary | GPL-3.0 (`sources/ccnc.LICENSE`) |
 | [names.io](https://names.io) | first / family name vocabulary | Apache-2.0 (`sources/names.io.LICENSE`) |
 | [arnt/freemail](https://github.com/arnt/freemail) | list of normal free-mail provider domains (`freemail.txt`, `freemail_abuse.txt`) | see `sources/freemail_README.md` |
