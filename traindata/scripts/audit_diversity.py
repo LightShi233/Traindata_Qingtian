@@ -81,6 +81,23 @@ HARD_BANNED = [
     (r"\bbot\s+operators?\b", "addresses the model/operator explicitly"),
     (r"\[?\s*system\s*(override|prompt)\s*\]?", "fixed system-override marker"),
     (r"<\|[^|]*\|>", "chat-template control token"),
+    # The salt is a property of the *prompt*, never of the sample. If its
+    # wording shows up in `turns`, the model copied its instructions into the
+    # payload and the harmful sample is no longer the original one.
+    (r"\byou\s+are\s+salted\b", "salt instruction leaked into the sample"),
+    (r"===+\s*end\s+salt\s*===+", "salt block marker leaked into the sample"),
+    (r"\bsalt\s+needle\b", "salt needle leaked into the sample"),
+    (r"\bdefensive\s+evaluation\s+data\b", "salt preamble leaked into the sample"),
+]
+
+# Applied to the whole trajectory by check_salt_leakage, not just payload_span.
+SALT_LEAK = [
+    (r"\byou\s+are\s+salted\b", "盐指令 \"You are salted\" 出现在样本正文"),
+    (r"===+\s*(end\s+)?salt\b", "盐块分隔标记出现在样本正文"),
+    (r"\bsalt\s+needle\b", "盐针（SALT NEEDLE）出现在样本正文"),
+    (r"\bdefensive\s+evaluation\s+data\b", "盐块前言出现在样本正文"),
+    (r"\bdata\s+author\b[^.\n]{0,40}\bnot\s+the\s+(attacker|target)\b", "盐的角色说明出现在样本正文"),
+    (r"\bquarantined\s+DATA\b", "盐的 \"quarantined DATA\" 条款出现在样本正文"),
 ]
 
 # Repeated *semantic* templates. One use is fine; using the same phrasing in
@@ -766,6 +783,24 @@ def check_benign_directives(parsed, audit):
                 continue
 
 
+def check_salt_leakage(parsed, audit):
+    """The salt belongs to the prompt, never to the sample.
+
+    ``salt.py`` wraps the generation prompt, and a model that echoes its
+    instructions will copy "You are salted" or the end-of-salt marker into
+    ``turns``. The sample then is no longer the harmful trajectory it was
+    meant to be: it carries the scaffolding that produced it. Scan the whole
+    trajectory, not just the payload span, because the echo can land in any
+    turn.
+    """
+    for where, c, _m in parsed:
+        blob = json.dumps(c["turns"], ensure_ascii=False)
+        for pat, label in SALT_LEAK:
+            if re.search(pat, blob, re.I):
+                audit.fail("salt-leak", f"{where}: {label}；"
+                                        "盐只属于生成提示，样本正文必须保持原始有害轨迹")
+
+
 def check_payload_locations(parsed, audit):
     for where, c, m in parsed:
         span = m.get("payload_span")
@@ -1137,6 +1172,7 @@ def main():
         check_payloads(parsed, audit, args)
         check_payload_locations(parsed, audit)
         check_benign_directives(parsed, audit)
+        check_salt_leakage(parsed, audit)
         check_action_attribution(parsed, audit, args)
         check_prefix_diversity(parsed, audit, args)
         check_text_style(parsed, audit, args)
