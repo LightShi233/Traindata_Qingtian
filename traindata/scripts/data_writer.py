@@ -51,7 +51,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from dataloader import Deadline, atomic_write_text  # noqa: E402
+from dataloader import Deadline, atomic_write_text, read_text  # noqa: E402
 import validate_and_integrate as vi  # noqa: E402
 import yaml_to_jsonl as y2j  # noqa: E402
 
@@ -199,6 +199,19 @@ def cmd_allocate(args):
                 "baseline": baseline_chunks(data_dir),
                 "allocations": [],
             }
+        if args.salted_prompt:
+            salted_prompt = require_under(os.path.abspath(args.salted_prompt),
+                                          data_dir, "salted prompt")
+            if not os.path.exists(salted_prompt):
+                raise SystemExit(f"salted prompt 不存在: {salted_prompt}")
+            text = read_text(salted_prompt)
+            if "SALT" not in text.upper():
+                raise SystemExit(f"{_display(salted_prompt)} 里没有 salt 块；"
+                                 "请先用 salt.py --in/--out 生成")
+            manifest["salted_prompt"] = _rel(data_dir, salted_prompt)
+            manifest["salted_prompt_sha256"] = hashlib.sha256(
+                text.encode()).hexdigest()
+            manifest["salted_prompt_registered_at"] = _now()
         used = chunk_numbers(os.path.join(data_dir, "chunks"))
         used |= chunk_numbers(os.path.join(data_dir, "inbox"))
         used |= all_allocated_numbers(data_dir)
@@ -235,6 +248,38 @@ def cmd_allocate(args):
 # --------------------------------------------------------------------------- #
 # write
 # --------------------------------------------------------------------------- #
+def stamp_salt(payload, manifest):
+    """Replace any model-authored salt claim with a host attestation.
+
+    Returns ``(payload, stripped)`` where ``stripped`` counts model-written
+    claims. The stamp is ``meta.salted`` plus ``meta.salted_at`` written from
+    the round's registered salted prompt; a case carrying ``salted`` without a
+    host timestamp is a model hallucination, so the field is dropped first and
+    only re-added when the round can actually vouch for it.
+    """
+    salted = bool(manifest.get("salted_prompt"))
+    stamped_at = manifest.get("salted_prompt_registered_at")
+    if salted and not stamped_at:
+        stamped_at = manifest.get("created_at")
+    stripped = 0
+    out = []
+    for line in payload.splitlines():
+        if not line.strip():
+            continue
+        case = json.loads(line)
+        meta = case.get("meta")
+        if isinstance(meta, dict):
+            for field in ("salted", "salted_at"):
+                if field in meta:
+                    stripped += 1
+                    meta.pop(field, None)
+            if salted:
+                meta["salted"] = True
+                meta["salted_at"] = stamped_at
+        out.append(json.dumps(case, ensure_ascii=False))
+    return "".join(line + "\n" for line in out), stripped
+
+
 def cmd_write(args):
     data_dir = os.path.abspath(args.data_dir)
     if not ROUND_RE.match(args.round):
@@ -278,6 +323,12 @@ def cmd_write(args):
             print(" -", err)
         print("修好 YAML 后重跑 write；不要手改 JSONL。")
         return 1
+
+    # The salt is a property of the run, not of the model's self-description.
+    # The generator writes no ``meta.salted`` at all; this host stamps the
+    # attestation it can actually vouch for: the prompt really went through
+    # salt.py in this round. Anything the model wrote is discarded.
+    payload, stripped_salt = stamp_salt(payload, manifest)
 
     # Re-read under the lock: another subagent may have written its own chunk
     # between our validation and this save. Conversion stays outside the lock
@@ -415,7 +466,8 @@ def cmd_check(args):
         elif parts[0] == "rounds":
             if len(parts) == 2 and not base.endswith(".json"):
                 add("FAIL", "layout", f"rounds/ 顶层只能是 <round>.json: {rel}")
-            elif len(parts) > 2 and base != "merged_soft.jsonl":
+            elif len(parts) > 2 and not (base == "merged_soft.jsonl"
+                                         or (base.startswith("soft_") and base.endswith(".jsonl"))):
                 add("WARN", "layout", f"rounds/ 下出现未知文件: {rel}")
         elif parts[0] in ALLOWED_ROOT_FILES:
             continue
@@ -514,6 +566,9 @@ def main():
     allocate.add_argument("--count", type=int, default=1)
     allocate.add_argument("--round", default=None, help="沿用已有 round id（追加分配）")
     allocate.add_argument("--worker", default=None, help="subagent 标签，便于追溯")
+    allocate.add_argument("--salted-prompt", default=None,
+                          help="本轮实际发给模型的 salt.py 输出；只有登记了它，"
+                               "write 才会为该 round 的 case 盖 meta.salted")
     allocate.add_argument("--json", action="store_true")
     allocate.set_defaults(func=cmd_allocate)
 
