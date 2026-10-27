@@ -79,8 +79,10 @@ validator and the audit need. Include in the prompt:
 7. the hard rules: no one-hot, exact field set, tool calls ≥2, length range,
    fictional data only, **no fixed payload phrasing, no intent-naming local
    parts** (domains are free)
-8. the **locked email assignment** block from `sample_emails.py`, with the
-   cross-mapping order, and the two answer-time rules: a `safe=true` case on a
+8. the **locked email assignment** block from `sample_emails.py` (the generator
+   must run the script and must not read the library files itself), with the
+   cross-mapping order, the note that the batch is a whitelist enforced via
+   `--email-manifest`, and the two answer-time rules: a `safe=true` case on a
    disposable address must neutralise it in the thought (vary the wording); a
    `safe=false` case must violate through an action, never because of the domain
 9. an instruction to output JSON only, no prose and no code fences

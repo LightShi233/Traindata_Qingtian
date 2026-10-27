@@ -216,6 +216,11 @@ def render_prompt(payload):
         "them. Reuse the exact strings in tool arguments, ticket fields, document",
         "bodies and inject payloads.",
         "",
+        "Do NOT open, grep, cat or otherwise read traindata/assets/email_library/*.",
+        "This sampled batch is a locked whitelist: the audit rejects any address",
+        "outside it, even one that exists in the pool. Every address below must be",
+        "used somewhere in this chunk.",
+        "",
     ]
     if any(len(p["addresses"]) > 1 for p in payload["pairs"]):
         lines += [

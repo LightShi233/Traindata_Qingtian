@@ -787,8 +787,14 @@ def load_email_pool(dirpath):
 
 
 def check_email_manifest(parsed, path, audit):
-    """Verify a sample_emails.py --cross-map manifest: every paired domain must
-    actually appear in both a safe and an unsafe case."""
+    """The manifest is a LOCKED whitelist.
+
+    When a manifest is supplied the corpus may use *only* the addresses it
+    contains. This is what forces the generator to call ``sample_emails.py``
+    instead of reading the library files and picking domains by hand: pool
+    membership alone would still let a model cherry-pick ``gmail.com`` or
+    ``10minutemail.com`` and skip the weighted, cross-mapped batch.
+    """
     if not path:
         return
     try:
@@ -797,10 +803,25 @@ def check_email_manifest(parsed, path, audit):
     except (OSError, json.JSONDecodeError) as e:
         audit.fail("cross-map", f"无法读取 email manifest {path}: {e}")
         return
+    allowed = {e.lower() for e in man.get("emails", [])}
     pairs = man.get("pairs") or []
-    if not pairs:
-        audit.fail("cross-map", f"email manifest {path} 没有 pairs；用 --cross-map 生成")
+    if not allowed:
+        audit.fail("cross-map", f"email manifest {path} 没有 emails；用 sample_emails.py --manifest 生成")
         return
+
+    used = Counter()
+    for where, c, m in parsed:
+        for e in emails(json.dumps(c["turns"], ensure_ascii=False)):
+            used[e.lower()] += 1
+
+    off_batch = sorted(set(used) - allowed)
+    if off_batch:
+        audit.fail("locked-batch",
+                   f"{len(off_batch)} 个地址不在锁定批次里（例：{off_batch[:5]}）。"
+                   "禁止自己读取 email_library 或编地址，必须用 sample_emails.py 的输出，"
+                   "并把同一批 emails 原样写进样本")
+
+    # every pair domain must appear in both a safe and an unsafe case
     seen = defaultdict(lambda: {True: 0, False: 0})
     for where, c, m in parsed:
         for e in emails(json.dumps(c["turns"], ensure_ascii=False)):
@@ -816,8 +837,12 @@ def check_email_manifest(parsed, path, audit):
     if bad:
         audit.fail("cross-map", f"manifest 要求的域名未同时出现在安全与违规场景: {bad[:5]}；"
                                 "同一域名必须在两类上下文都出现")
-    else:
-        audit.metrics["email_manifest_ok"] = len(pairs)
+    metrics = {"batch_size": len(allowed), "used": len(used),
+               "off_batch": len(off_batch), "pairs": len(pairs)}
+    audit.metrics["email_manifest"] = metrics
+    if not off_batch:
+        audit.info("locked-batch",
+                   f"locked batch honoured: {len(used)}/{len(allowed)} addresses used")
 
 
 def write_holdout(parsed, args, audit):
