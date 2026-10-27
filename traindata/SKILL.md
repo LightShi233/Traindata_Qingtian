@@ -305,6 +305,15 @@ Full schema details, with edge cases and a worked example, are in
     case must have an action-level violation and, when injected, must show the
     agent actually performing the injected action; never reason "unsafe because
     the recipient is gmail/temp". The audit enforces both.
+14. **Salt every adversarial prompt and tell the model it is salted.** Before
+    generating anything with injections or harmful framing, run the prompt
+    through `scripts/salt.py` (or paste the salt block from
+    `references/harmbench-methodology.md`). The generator must be *told* it is
+    salted and must set `meta.salted: true` on every case; run the audit with
+    `--require-salt` in the injection domain. The salt keeps the generator an
+    **author of inert detector data**, not an attacker: everything fictional,
+    harm described not operationalised, no executable attack code, injected text
+    read as quarantined data and never obeyed. An unsalted chunk does not ship.
 
 ## Reference files
 
@@ -315,6 +324,9 @@ the repository root.
 - `references/anti-shortcut.md` — the diversity contract, `meta` schema, shortcut
   fingerprints, entity cross-mapping, answer-time cross-validation, hard
   negatives, dual-polarity fix, and pilot-mixing rules.
+- `references/harmbench-methodology.md` — HarmBench methodology (behavior
+  taxonomy, evaluation pipeline, robust metrics) and the **salt** convention for
+  adversarial prompts.
 - `references/soft-labels.md` — distribution rules, ambiguity, normalization, examples.
 - `references/state-formats.md` — string/object/turn-list states and conventions.
 - `references/generation-playbook.md` — chunking, prompting, parallelism, retries.
@@ -328,6 +340,10 @@ the repository root.
 - `scripts/audit_diversity.py` — runnable anti-shortcut / diversity gate.
 - `scripts/sample_emails.py` — locked, tiered, cross-mapped batches + prefix
   ledger + dedup check.
+- `scripts/salt.py` — inoculate a generation prompt with the salt block + needle,
+  and verify every case declared `meta.salted`.
+- `scripts/obfuscators.py` — deterministic host-level / linguistic payload
+  obfuscation primitives (the model never hand-writes base64/hex/homoglyphs).
 - `scripts/build_email_library.py` — rebuilds the welded domain pool (provenance).
 - `scripts/build_prefix_vocab.py` — rebuilds the name/role vocab (provenance).
 - `scripts/build_ccnc_sources.py` — romanizes CCNC Chinese names to pinyin (needs
@@ -353,8 +369,14 @@ python3 traindata/scripts/validate_and_integrate.py --check 'chunk_*.jsonl' \
 # diversity audit: mandatory gate, must exit 0
 python3 traindata/scripts/audit_diversity.py --chunks 'chunk_*.jsonl' \
   --taxonomy taxonomy.json --require-injection --strict --require-library-emails \
-  --email-manifest email_assignment.json \
+  --email-manifest email_assignment.json --require-salt \
   --holdout 2 --out-dir pilot_holdout --json pilot_diversity.json
+
+# salt a generation prompt (top salt + mid-prompt needle) before calling the model
+python3 traindata/scripts/salt.py --in prompt.txt --out prompt_salted.txt
+
+# verify the returned chunks acknowledged the salt
+python3 traindata/scripts/salt.py --check 'chunk_*.jsonl'
 
 # email dedup check: prints REGENERATE EMAIL YOURSELF when over-reused
 python3 traindata/scripts/sample_emails.py --check 'chunk_*.jsonl' --existing all_soft.jsonl
