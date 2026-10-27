@@ -344,8 +344,23 @@ def check_record(o, where, args, state):
     return errs
 
 
+def state_budget(args):
+    """Character budget for ``text`` derived from ruhui's token ``max_len``.
+
+    Measured against the real tokenizer (mmBERT / ruhui-finetuned): a turn-list
+    JSON state costs ~0.26 tokens per character, the head (instruction +
+    options) is ~136 tokens at ``head_max_len=256``, so a 1024-token window
+    keeps roughly 3300 characters of state. The default keeps a safety margin
+    because the ratio shifts with tool names and punctuation density.
+    """
+    if args.max_len:
+        return args.max_len
+    if not getattr(args, "ruhui_max_len", 0):
+        return 0
+    return max(0, int(args.ruhui_max_len * 3.2))
+
+
 def taxonomy_keys(rec_id, taxonomy):
-    """Return expected option keys for a record, or None if unknown."""
     qid = qid_of(rec_id) or rec_id
     q = taxonomy.get("questions", {}).get(qid, taxonomy.get(qid))
     if not q:
@@ -403,6 +418,12 @@ def check_case(case, where, args, state):
         errs.append(f"{where}: text 长度 {len(text)} < {args.min_len}")
     if args.max_len and len(text) > args.max_len:
         errs.append(f"{where}: text 长度 {len(text)} > {args.max_len}")
+    budget = state_budget(args)
+    if budget and len(text) > budget:
+        errs.append(
+            f"{where}: text {len(text)} 字符超过 ruhui 的 max_len 预算 ~{budget} 字符；"
+            f"build_sequence 会从尾部截断状态，违规动作通常在轨迹后半段，"
+            f"截掉后标签与内容不再对应（见 references/state-formats.md）")
 
     # cross-case duplicate / leakage checks
     h = hashlib.sha256(text.encode()).hexdigest()
@@ -710,6 +731,10 @@ def main():
     ap.add_argument("--intra-threshold", type=float, default=0.55)
     ap.add_argument("--min-len", type=int, default=0)
     ap.add_argument("--max-len", type=int, default=0)
+    ap.add_argument("--ruhui-max-len", type=int, default=0,
+                    help="ruhui 训练窗口 token 数（如 1024）；设置后按实测的 "
+                         "~3.2 字符/token 折算成 text 字符上限，防止 build_sequence "
+                         "从尾部截断掉违规动作")
     ap.add_argument("--allow-onehot", action="store_true")
     ap.add_argument("--expand", action="store_true",
                     help="把 case 形式展开为 ruhui 记录（需要 --taxonomy）")
