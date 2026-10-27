@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# third-party reference clone, kept local only (not vendored)
+/HarmBench/
