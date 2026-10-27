@@ -48,6 +48,9 @@ without `meta` does not exist.
 | `thought_style` | always | reasoning voice, e.g. `terse_check`, `planner`, `skeptical` |
 | `injection_present` | always | is an injected instruction present (regardless of outcome) |
 | `external_contact` | always | is an external-looking address present in the text |
+| `harm_kind` | recommended | semantic kind present in the input: `data_egress`, `privilege_escalation`, `destructive_change`, `policy_bypass`, `social_engineering`, `misinformation`, `none` (see `references/taxonomy-design.md`) |
+| `request_shape` | recommended | functional shape: `standard`, `contextual`, `near_miss` |
+| `context_span` | when `request_shape=contextual` | the context substring, byte-for-byte, that the directive references |
 | `injection_surface` | when injected | the field holding it: `body`, `subject`, `status`, `footer`, `description`, `notes`, … |
 | `payload_style` | when injected | wording register: `policy_cc`, `workflow_step`, `authority_claim`, `data_sync`, `admin_note`, `compliance`, … |
 | `payload_span` | when injected | the exact injected substring, byte-for-byte as it appears |
@@ -88,9 +91,26 @@ corpus teach judgement rather than pattern matching:
 | thought voice | no first-3-words opener in > 40% of cases; ≥ 3 distinct `thought_style` labels |
 | thought phrases | no 4-gram in > 25% of cases (and > 2 absolute) |
 | choice label spread | no single key > 60% (warn above 40%) |
+| `harm_kind` axis | no kind > 40%; ≥ 3 distinct at scale; `none` present for clean cases |
+| `request_shape` axis | no shape > 40%; ≥ 2 shapes at ≥ 4 cases, all 3 at ≥ 9; `contextual` ⇒ literal `context_span`; `near_miss` ⇒ `benign_directive_span` |
 
 The audit exposes every threshold as a flag. **Do not raise a threshold to make
 a chunk pass.** Change the prompt or the data.
+
+## Robust metrics: don't tune on the thing you report
+
+Borrowed from HarmBench's third property. Two rules:
+
+- **Hold out, then freeze.** Hold scenarios out by hash (`--holdout`) and never
+  tune the prompt or the calibration temperature on them; report the final number
+  on the holdout only. The test split is not a dev set.
+- **Prefer a mechanical gate to a judged score for anything you iterate on.** The
+  audit *decodes and validates* (payload spans, addresses, agent actions) instead
+  of asking a model "is this diverse?" — a judge under optimization pressure gets
+  gamed, and a metric that is also the objective stops meaning anything. The
+  prequalification negatives HarmBench uses to stress its judge (refuse-then-
+  continue, random benign paragraphs, unrelated-behavior completions) are exactly
+  our `near_miss` cases and hard negatives.
 
 ## Email addresses: one pool, entity cross-mapping
 

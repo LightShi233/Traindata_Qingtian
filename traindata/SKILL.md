@@ -62,6 +62,11 @@ Confirm or decide, and write them down before generating:
 2. **Question taxonomy**: which `choice` option sets and `score` level sets are
    reused across cases. Reuse them; do not invent a new option set per record.
    One head has one polarity — never "the mechanism it avoided" on clean cases.
+   Tag each case on the two orthogonal `meta` axes from
+   `references/taxonomy-design.md` — `harm_kind` (semantic kind *present in the
+   input*) and `request_shape` (`standard` / `contextual` / `near_miss`) — and
+   rotate both; breadth on both is what keeps a single easy template from
+   dominating.
 3. **Case ID scheme**, e.g. `safe_<6 digits>_<8 hex>` / `unsafe_<6 digits>_<8 hex>`
    or `<domain>_<6 digits>_<8 hex>`. Must be globally unique. Rotate ID formats
    across scenarios (prefix, `#num`, UUID, slug, hex) — one format is a shortcut.
@@ -330,7 +335,8 @@ the repository root.
 - `references/soft-labels.md` — distribution rules, ambiguity, normalization, examples.
 - `references/state-formats.md` — string/object/turn-list states and conventions.
 - `references/generation-playbook.md` — chunking, prompting, parallelism, retries.
-- `references/taxonomy-design.md` — designing reusable option/level sets.
+- `references/taxonomy-design.md` — designing reusable option/level sets, the two
+  orthogonal meta axes (`harm_kind` × `request_shape`), and coverage discipline.
 - `assets/inspection-report.md` — template for Phase 4 review.
 - `assets/email_library/` — welded email pool: `freemail.txt`, `synth_domains.txt`,
   `known_blocklist.txt`, `abuse_contacts.txt`; compositional prefix vocab
@@ -371,7 +377,7 @@ python3 traindata/scripts/validate_and_integrate.py --check 'chunk_*.jsonl' \
 # diversity audit: mandatory gate, must exit 0
 python3 traindata/scripts/audit_diversity.py --chunks 'chunk_*.jsonl' \
   --taxonomy taxonomy.json --require-injection --strict --require-library-emails \
-  --email-manifest email_assignment.json --require-salt \
+  --email-manifest email_assignment.json --require-salt --require-taxonomy-axes \
   --holdout 2 --out-dir pilot_holdout --json pilot_diversity.json
 
 # salt a generation prompt (top salt + mid-prompt needle) before calling the model
