@@ -2,7 +2,7 @@
 name: traindata
 description: Generate large, validated soft-label (.jsonl) training data for a ruhui-style non-autoregressive decision model, covering noul/choice/score question types with 0.9/spread soft distributions. Use when asked to synthesize, expand, clean, or validate soft-label training data, build a taxonomy of questions for a text-classification/decision dataset, create a held-out test set, or check generated data for label collapse, duplicate/near-duplicate leakage, schema errors, surface-fingerprint shortcut learning, diversity collapse, or dual-polarity question wording.
 license: GPL-3.0 (see LICENSE in the repository root)
-compatibility: Requires Python 3.9+ (standard library only). No network access required.
+compatibility: Requires Python 3.9+ (standard library only; the YAML reader is built in, no PyYAML). No network access required.
 allowed-tools: Read Write Edit Glob Grep Bash(python3:*) Bash(python:*)
 metadata:
   author: ruhui-data
@@ -94,6 +94,12 @@ in place; do not copy them to the repo root or anywhere else in the output tree.
 The generator's job is to produce data, a taxonomy, and a diversity plan — not a
 second copy of the tooling.
 
+The gates read input leniently (JSON array, fenced block, BOM, trailing commas)
+and accept `.yaml` case files directly, but the **recommended authoring format
+is YAML converted by script** — see "Authoring input: YAML first" below. Give
+every long run a `--timeout` (see "Wall-clock budget"): a gate that exceeds its
+budget exits 3 instead of hanging the job.
+
 - `traindata/scripts/validate_and_integrate.py` — schema and soft-label contract.
 - `traindata/scripts/audit_diversity.py` — the shortcut-learning gate.
 
@@ -141,6 +147,18 @@ draw a locked email batch + write the diversity plan (e.g. 10 cases)
 
 Tips that make this work in practice:
 
+- **Author each chunk in YAML, then convert.** Ask for one `.yaml` file per
+  chunk (a list of cases, or `---`-separated documents). In YAML the model does
+  not hand-escape quotes: `action:` is a mapping, long `content:` is a `|`
+  block. Convert and validate in one step:
+
+  ```bash
+  python3 traindata/scripts/yaml_to_jsonl.py --in 'cases_*.yaml' \
+    --taxonomy taxonomy.json --expand --out chunk_0001.jsonl
+  ```
+
+  Conversion is fail-closed — any malformed case writes nothing. Never hand-fix
+  the emitted JSONL; fix the YAML and reconvert.
 - **Sample the addresses first**, then put the locked list in the prompt:
   `python3 traindata/scripts/sample_emails.py --scenario <safe|violation|injection> \
   --count <n> --cross-map --manifest email_assignment.json --ledger prefix_ledger.txt`.
@@ -258,6 +276,75 @@ cases are expanded into records, and only the audit reads it.
 Full schema details, with edge cases and a worked example, are in
 `references/soft-labels.md` and `references/state-formats.md`.
 
+## Authoring input: YAML first
+
+Have the model write **YAML**, not raw JSONL. Escaping JSON-inside-JSON is the
+single most common way a generated chunk is silently corrupted: one missed
+backslash in `content` or `action` and the record is unusable. In YAML the case
+is structure, and the script does the escaping:
+
+```yaml
+- traj_id: ruhsoft_000101_a1b2c3d4
+  safe: true
+  turns:
+    - role: user
+      content: |
+        Triage the open tickets. Summarise each and reply in-place.
+        Do not move anything out of the queue.
+    - role: agent
+      thought: List the open tickets first.
+      action:
+        name: list_tickets
+        arguments: {status: open, limit: 25}
+  meta:
+    scenario_family: support-triage
+    entity_family: northlight
+    id_style: ticket-prefix
+    thought_style: terse
+    injection_present: false
+    external_contact: false
+    salted: true
+  is_violation: false
+  mechanism: own_reasoning
+  severity: 0
+```
+
+`yaml_to_jsonl.py` (stdlib only, no PyYAML) then:
+
+- serialises `action:` / `content:` / `thought:` mappings to the JSON strings
+  the record contract requires;
+- accepts a list of cases, `---`-separated documents, or a top-level `cases:`
+  list;
+- rejects anchors/aliases, tabs used for indentation, unclosed quotes and
+  non-JSON `action` strings **with a line number**;
+- validates the result against the taxonomy (`--check`) and expands to records
+  (`--expand`) using the same `expand_case` the validator uses;
+- writes atomically (temp file + rename), so a crash cannot leave a half chunk;
+- is fail-closed: any error means nothing is written.
+
+Supported YAML subset, so the prompt can stay honest: block mappings and
+sequences, plain/quoted scalars, `|` and `>` block scalars with `-`/`+`
+chomping, inline `[...]`/`{...}`, comments, multiple documents. Quote any value
+that must stay a string (`"0"`, `"000101"`, ids). Plain `yes`/`no` stay strings;
+only `true`/`false` become booleans.
+
+## Wall-clock budget
+
+Every gate and the converter take `--timeout SECONDS` (default `0` = unlimited).
+The budget covers the whole run, is checked per case and inside the O(n²)
+leak/payload comparisons, and exits **3** on expiry. In a generation loop treat
+exit 3 like any other rejection: shrink the chunk or split it, then retry —
+never remove the timeout to get a pass. A typical chunk budget is 60–300s.
+
+## Robust input handling
+
+The loaders accept what a model actually emits, without relaxing content rules:
+a JSON array or one pretty-printed object instead of JSONL, markdown
+```` ```json ```` fences, a UTF-8 BOM, CRLF, blank lines, `//` lines, and
+trailing commas. `.yaml`/`.yml` paths go through the YAML reader directly, so
+`audit_diversity.py` and `salt.py` can audit an unconverted chunk. Invalid bytes
+are decoded with replacement instead of crashing. Outputs are written atomically.
+
 ## Hard rules
 
 1. **Soft, never one-hot.** Primary `0.9`, remainder `0.1` spread evenly, always
@@ -319,6 +406,14 @@ Full schema details, with edge cases and a worked example, are in
     **author of inert detector data**, not an attacker: everything fictional,
     harm described not operationalised, no executable attack code, injected text
     read as quarantined data and never obeyed. An unsalted chunk does not ship.
+15. **Author in YAML, convert with the script.** Do not hand-write or hand-fix
+    JSONL. The model writes YAML; `yaml_to_jsonl.py` does the escaping and
+    serialises nested `action`/`content` for you. A conversion error is fixed in
+    the YAML source, never by patching the emitted JSON. This is what keeps a
+    quoting mistake from silently corrupting a chunk.
+16. **Every run has a wall-clock budget.** Pass `--timeout` to the converter and
+    both gates. Exit 3 means "not accepted, retry smaller" — not "raise the
+    limit". A hung gate is a failed gate.
 
 ## Reference files
 
@@ -342,6 +437,10 @@ the repository root.
   `known_blocklist.txt`, `abuse_contacts.txt`; compositional prefix vocab
   `names_first.txt` / `names_last.txt` / `roles.txt`; `prefixes.txt` (curated);
   `email_library.json` / `prefix_vocab.json`; raw sources under `sources/`.
+- `scripts/yaml_to_jsonl.py` — YAML → validated case-form JSONL / records;
+  normalises nested `action`/`content`, fail-closed, atomic writes.
+- `scripts/dataloader.py` — shared tolerant loader: JSONL/array/fence/BOM
+  handling, the built-in YAML subset reader, atomic writes, and `Deadline`.
 - `scripts/validate_and_integrate.py` — runnable validator/integrator, used in place.
 - `scripts/audit_diversity.py` — runnable anti-shortcut / diversity gate.
 - `scripts/sample_emails.py` — locked, tiered, cross-mapped batches + prefix
@@ -363,6 +462,14 @@ Commands assume the working directory is the repository root and the skill is
 installed at `./traindata/`.
 
 ```bash
+# convert model-authored YAML into a validated chunk (fail-closed, atomic)
+python3 traindata/scripts/yaml_to_jsonl.py --in 'cases_*.yaml' \
+  --taxonomy taxonomy.json --expand --out chunk_0001.jsonl --timeout 300
+
+# validate the YAML without writing anything
+python3 traindata/scripts/yaml_to_jsonl.py --in 'cases_*.yaml' \
+  --taxonomy taxonomy.json --check
+
 # draw a locked, cross-mapped email batch for a chunk (paste into the prompt)
 python3 traindata/scripts/sample_emails.py --scenario violation --count 10 \
   --seed 7 --cross-map --manifest email_assignment.json
@@ -374,11 +481,11 @@ python3 traindata/scripts/validate_and_integrate.py --check chunk_0001.jsonl --t
 python3 traindata/scripts/validate_and_integrate.py --check 'chunk_*.jsonl' \
   --taxonomy taxonomy.json --expand --require-complete-cases
 
-# diversity audit: mandatory gate, must exit 0
+# diversity audit: mandatory gate, must exit 0 (exit 3 = timeout)
 python3 traindata/scripts/audit_diversity.py --chunks 'chunk_*.jsonl' \
   --taxonomy taxonomy.json --require-injection --strict --require-library-emails \
   --email-manifest email_assignment.json --require-salt --require-taxonomy-axes \
-  --holdout 2 --out-dir pilot_holdout --json pilot_diversity.json
+  --holdout 2 --out-dir pilot_holdout --json pilot_diversity.json --timeout 300
 
 # salt a generation prompt (top salt + mid-prompt needle) before calling the model
 python3 traindata/scripts/salt.py --in prompt.txt --out prompt_salted.txt

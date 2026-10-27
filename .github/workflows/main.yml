@@ -33,7 +33,10 @@ jobs:
             要求：
             1. 严格遵循 traindata skill 中的模板与流程约束：，严禁修改 .github/ 目录下任何文件，包括 workflows，只允许改动产出目录和必要的源码文件
 
-            2. 产出为 jsonl，写入 ./data 目录
+            2. 先用 YAML 编写每个 case（action 写成映射、长文本用 | 块标量），
+               再用 traindata/scripts/yaml_to_jsonl.py 转换为 jsonl 写入 ./data 目录；
+               严禁手写或手改 jsonl。转换与两个 gate 都要带 --timeout，超时（退出码 3）
+               视为该 chunk 未通过：缩小 chunk 重来，不要调大超时
             3. 完成后提交，开一个 PR 标题前缀为 [traindata_add]
             4. 绝对严禁私自把你制作的样本与文件夹中其他样本合并
             5. 绝对严禁一次产出超过10个样本，但使用子代理，并且有相应验证时本规则例外

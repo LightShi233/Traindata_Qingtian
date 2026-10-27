@@ -55,6 +55,15 @@ Options
 --split-ratios      Train/calibration/test ratios (default 0.8,0.1,0.1).
 --seed              Deterministic split seed (default 13).
 --card PATH         Write a Markdown data card.
+--timeout SECONDS   Wall-clock budget for the whole run (0 = unlimited); a run
+                    that exceeds it exits 3 instead of hanging CI.
+
+Input tolerance
+---------------
+JSON is read leniently: a JSON array or one pretty-printed object is accepted in
+place of JSONL, along with markdown fences, a UTF-8 BOM and trailing commas. For
+YAML case files, convert first with ``yaml_to_jsonl.py`` (or point audit/salt at
+the .yaml directly, which use the same loader).
 """
 import argparse
 import glob
@@ -66,6 +75,9 @@ import re
 import statistics
 import sys
 from collections import Counter, defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dataloader import Deadline, atomic_write_text, read_jsonl  # noqa: E402
 
 REQUIRED = {"id", "source_dataset", "source_index", "source_hash", "text",
             "qtype", "criteria", "instruction", "soft_label"}
@@ -90,24 +102,12 @@ def jaccard(a, b):
     return inter / (len(a) + len(b) - inter) if (a or b) else 0.0
 
 
-def read_jsonl(path):
-    """Yield (lineno, object) with a parse-error sentinel; UTF-8 always."""
-    with open(path, encoding="utf-8") as f:
-        for i, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                yield i, json.loads(line)
-            except json.JSONDecodeError as e:
-                yield i, {"__parse_error__": str(e)}
-
-
 class LeakIndex:
     """Lazily-loaded n-gram index over one or more reference corpora."""
 
-    def __init__(self, paths, threshold):
+    def __init__(self, paths, threshold, deadline=None):
         self.threshold = threshold
+        self.deadline = deadline
         self.grams = []
         if threshold <= 0:
             return
@@ -115,7 +115,9 @@ class LeakIndex:
             if not p or not os.path.exists(p):
                 continue
             n = 0
-            for _, o in read_jsonl(p):
+            for _, o in read_jsonl(p, deadline):
+                if self.deadline:
+                    self.deadline.check(f"leak {os.path.basename(p)}")
                 if isinstance(o.get("text"), str):
                     self.grams.append(grams(o["text"]))
                     n += 1
@@ -126,6 +128,8 @@ class LeakIndex:
         g = grams(text)
         ng = len(g)
         for ref in self.grams:
+            if self.deadline:
+                self.deadline.check("leak comparison")
             nr = len(ref)
             if not ng or not nr:
                 continue
@@ -478,8 +482,11 @@ def expand_case(case, index, taxonomy):
 # --------------------------------------------------------------------------- #
 def check_file(path, args, state, expand):
     errs = []
-    for lineno, o in read_jsonl(path):
+    deadline = getattr(args, "deadline", None)
+    for lineno, o in read_jsonl(path, deadline):
         where = f"{os.path.basename(path)}:{lineno}"
+        if deadline:
+            deadline.check(where)
         if "__parse_error__" in o:
             errs.append(f"{where}: JSON 解析失败: {o['__parse_error__']}")
             continue
@@ -519,11 +526,13 @@ def collect(paths, args, expand=False):
     return errors, state
 
 
-def load_rows(paths):
+def load_rows(paths, deadline=None):
     rows = []
     for p in paths:
-        for _, o in read_jsonl(p):
-            if "__parse_error__" not in o:
+        for _, o in read_jsonl(p, deadline):
+            if deadline:
+                deadline.check(f"load {os.path.basename(p)}")
+            if isinstance(o, dict) and "__parse_error__" not in o:
                 rows.append(o)
     return rows
 
@@ -662,10 +671,11 @@ def resolve_inputs(args):
 
 def resolve_leak(args, inputs):
     """Load explicit --leak paths, or opt-in auto-indexing of *soft*.jsonl."""
+    deadline = getattr(args, "deadline", None)
     if args.leak_threshold <= 0:
         return LeakIndex([], 0)
     if args.leak:
-        return LeakIndex(args.leak, args.leak_threshold)
+        return LeakIndex(args.leak, args.leak_threshold, deadline)
     if not args.auto_leak:
         print("[leak] no baseline loaded (pass --leak PATH or --auto-leak)", file=sys.stderr)
         return LeakIndex([], 0)
@@ -680,7 +690,7 @@ def resolve_leak(args, inputs):
         base = os.path.dirname(os.path.abspath(inputs[0]))
     cands = [p for p in sorted(glob.glob(os.path.join(base, "*soft*.jsonl")))
              if os.path.abspath(p) not in inputs_abs]
-    return LeakIndex(cands, args.leak_threshold)
+    return LeakIndex(cands, args.leak_threshold, deadline)
 
 
 def main():
@@ -707,6 +717,8 @@ def main():
     ap.add_argument("--split-ratios", default="0.8,0.1,0.1")
     ap.add_argument("--seed", type=int, default=13)
     ap.add_argument("--card", default=None, help="输出 Markdown data card 的路径")
+    ap.add_argument("--timeout", type=float, default=0.0,
+                    help="整次运行的墙钟上限（秒，0=不限）；超时以退出码 3 结束")
     args = ap.parse_args()
 
     if not (args.check or args.integrate or args.split_dir):
@@ -714,15 +726,23 @@ def main():
     if args.expand and not args.taxonomy:
         ap.error("--expand 需要 --taxonomy")
     if args.taxonomy:
-        with open(args.taxonomy, encoding="utf-8") as f:
-            args.taxonomy = json.load(f)
+        try:
+            with open(args.taxonomy, encoding="utf-8-sig") as f:
+                args.taxonomy = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"taxonomy 读取失败: {args.taxonomy}: {exc}", file=sys.stderr)
+            sys.exit(2)
     args.intra = args.intra_threshold
     args.leak_index = None
+    args.deadline = Deadline(args.timeout)
 
-    inputs = resolve_inputs(args)
-    args.leak_index = resolve_leak(args, inputs)
-
-    errors, state = collect(inputs, args, expand=args.expand)
+    try:
+        inputs = resolve_inputs(args)
+        args.leak_index = resolve_leak(args, inputs)
+        errors, state = collect(inputs, args, expand=args.expand)
+    except TimeoutError as exc:
+        print(f"TIMEOUT: {exc}", file=sys.stderr)
+        sys.exit(3)
     if errors:
         label = "校验" if args.check else "整合前校验"
         print(f"{label}失败 ({len(errors)} errors)")
@@ -737,7 +757,7 @@ def main():
         for i, case in enumerate(state["cases"]):
             rows.extend(expand_case(case, i, args.taxonomy))
     else:
-        rows = load_rows(inputs)
+        rows = load_rows(inputs, args.deadline)
 
     checks = [
         f"schema and soft-label validation: passed ({len(errors)} errors)",
@@ -762,9 +782,8 @@ def main():
         }
         for name in SPLIT_NAMES:
             path = os.path.join(args.split_dir, f"{name}.jsonl")
-            with open(path, "w", encoding="utf-8") as f:
-                for r in splits[name]:
-                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            atomic_write_text(path, "".join(
+                json.dumps(r, ensure_ascii=False) + "\n" for r in splits[name]))
             case_ids = sorted({case_key(r["id"]) for r in splits[name]})
             manifest["splits"][name] = {
                 "file": f"{name}.jsonl",
@@ -779,8 +798,8 @@ def main():
                 if cid in seen:
                     raise SystemExit(f"split bug: {cid} 同时出现在 {seen[cid]} 和 {name}")
                 seen[cid] = name
-        with open(os.path.join(args.split_dir, "split_manifest.json"), "w", encoding="utf-8") as f:
-            json.dump(manifest, f, indent=2, ensure_ascii=False)
+        atomic_write_text(os.path.join(args.split_dir, "split_manifest.json"),
+                          json.dumps(manifest, indent=2, ensure_ascii=False))
         print(f"split -> {args.split_dir} (seed={args.seed}, ratios={ratios})")
         for name in SPLIT_NAMES:
             m = manifest["splits"][name]
@@ -790,20 +809,16 @@ def main():
               f"--leak '{args.split_dir}/train.jsonl' --leak '{args.split_dir}/calibration.jsonl'")
     elif args.integrate:
         out = args.out or "all_soft.jsonl"
-        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-        with open(out, "w", encoding="utf-8") as f:
-            for r in rows:
-                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        atomic_write_text(out, "".join(
+            json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
         print(f"整合完成: {len(inputs)} chunks, {len(rows)} records -> {out}")
     else:
         print(f"OK: {len(rows)} records, {len({case_key(r['id']) for r in rows})} cases")
 
     print_summary(s, rows)
     if args.card:
-        os.makedirs(os.path.dirname(os.path.abspath(args.card)), exist_ok=True)
         source_desc = ", ".join(inputs)
-        with open(args.card, "w", encoding="utf-8") as f:
-            f.write(render_card(s, rows, source_desc, taxonomy_version, checks))
+        atomic_write_text(args.card, render_card(s, rows, source_desc, taxonomy_version, checks))
         print(f"data card -> {args.card}")
 
 
