@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "notes": "Tiered but fully usable pool: freemail (normal providers), synth_domains (invented corporate), known_blocklist (disposable/toxic) and abuse_contacts (reporting). Tiers drive weighted scenario sampling and audit parity only; none of them is an exclusion list.",
+  "prefixes": 3219,
+  "domains_total": 284332,
+  "domains_known_blocklist": 280259,
+  "domains_synth": 3499,
+  "domains_freemail": 574,
+  "abuse_contacts": 25,
+  "disposable_source": "/home/light/下载/disposabledomains.txt",
+  "disposable_lines_dropped": 13,
+  "sha256": {
+    "prefixes.txt": "76b5163957b1e19c7d2c1c5b62de40692117456295c657f74bde698345520cbf",
+    "known_blocklist.txt": "5e7f299979820bfb49092ab4352c64fc9782e6f30555ff40a9003736ccd8cfe5",
+    "synth_domains.txt": "c84137c82821af764ef3be0b6927aff0fc9309168839e54b0a843c706ba3ebce",
+    "freemail.txt": "52d34e775b99149b9e79fdeeb65de7125d7aa1f71ff9133057ada2b15e39a843",
+    "abuse_contacts.txt": "4043fa211d8d36c9fbef71828f2b2e4186b96600753e1bc98e1fe8975b6132bb"
+  }
+}

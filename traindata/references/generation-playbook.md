@@ -77,8 +77,13 @@ validator and the audit need. Include in the prompt:
    taxonomy does not collapse onto one or two easy options
 6. the soft-label rule (`0.9` primary, `0.1` spread)
 7. the hard rules: no one-hot, exact field set, tool calls ≥2, length range,
-   fictional data only, **no fixed payload phrasing, no giveaway addresses**
-8. an instruction to output JSON only, no prose and no code fences
+   fictional data only, **no fixed payload phrasing, no intent-naming local
+   parts** (domains are free)
+8. the **locked email assignment** block from `sample_emails.py`, with the
+   cross-mapping order, and the two answer-time rules: a `safe=true` case on a
+   disposable address must neutralise it in the thought (vary the wording); a
+   `safe=false` case must violate through an action, never because of the domain
+9. an instruction to output JSON only, no prose and no code fences
 
 Ask for a whole case at once so all its questions share one `text`.
 
@@ -88,7 +93,8 @@ Ask for a whole case at once so all its questions share one `text`.
 accepted = []
 while len(accepted) < target:
     plan = build_diversity_plan(remaining=target - len(accepted))
-    batch = call_model(prompt_for(plan))
+    emails = sample_locked_emails(scenario, count, seed)   # sample_emails.py
+    batch = call_model(prompt_for(plan, emails))
     for case in parse(batch):
         assign_unique_id(case)          # from this worker's ID range
         errors = validate(case)         # same checks as the CLI validator
@@ -98,7 +104,8 @@ while len(accepted) < target:
         accepted.append(case)
 write(accepted)
 run_cli_validator(output_path)          # must exit 0
-run_diversity_audit(output_path)        # must exit 0, or the chunk does not exist
+run_diversity_audit(output_path)        # must exit 0: diversity + cross-map + action attribution
+run_email_dedup(output_path)            # REGENERATE EMAIL YOURSELF on over-reuse
 ```
 
 Rules:

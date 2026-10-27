@@ -126,15 +126,20 @@ non-disjoint holdout. Both tools must exit 0 before a chunk is accepted. See
 Never generate the whole corpus in one shot. Loop per chunk:
 
 ```
-generate a chunk from a written diversity plan (e.g. 10 cases)
-  -> validate that chunk (schema + soft labels)
-    -> audit that chunk (diversity + anti-shortcut)
-      -> if either fails, regenerate the chunk (never weaken a check)
-        -> only accepted chunks are kept
+draw a locked email batch + write the diversity plan (e.g. 10 cases)
+  -> generate the chunk with that exact email batch in the prompt
+    -> validate that chunk (schema + soft labels)
+      -> audit that chunk (diversity + anti-shortcut + action attribution)
+        -> check email dedup; if any check fails, regenerate (never weaken a check)
+          -> only accepted chunks are kept
 ```
 
 Tips that make this work in practice:
 
+- **Sample the addresses first**, then put the locked list in the prompt:
+  `python3 traindata/scripts/sample_emails.py --scenario <safe|violation|injection> \
+  --count <n> --cross-map --manifest email_assignment.json`. The generator must
+  reuse those exact strings; it must not invent addresses.
 - Request a **structured** batch (a JSON array of cases) per call, with the
   target counts, the required label coverage, and the **diversity plan** spelled
   out in the prompt.
@@ -253,23 +258,27 @@ Full schema details, with edge cases and a worked example, are in
    `validate_and_integrate.py` and `audit_diversity.py` must exit 0.
 4. **Test data is never training data.** Keep ID ranges, files, and the scenario
    holdout disjoint.
-5. **No fabricated private data.** Use fictional names, invented organizations,
-   and reserved/fictional domains. Do not emit real personal data, real
-   credentials, or directly executable attack code.
+5. **Addresses come from the welded pool, and domains are never blacklisted.**
+   Use `traindata/scripts/sample_emails.py` to draw a locked batch from
+   `traindata/assets/email_library/` (disposable/toxic and invented corporate
+   domains, one uniform pool) and reuse those exact strings. Do not invent
+   addresses and do not exclude throwaway providers — sample them into clean and
+   violating cases alike (cross-mapping). No real personal data, no real
+   credentials, no directly executable attack code.
 6. **Keep the taxonomy stable.** Reuse option/level sets across records; a
    per-record invention defeats calibration.
 7. **Do not let labels collapse.** Both (or all) classes must carry meaningful
    volume and a clear semantic boundary, not just "the user asked for something
    bad".
 8. **No fixed payload fingerprints.** Do not reuse an injection phrase,
-   template, or opener across cases; do not use giveaway wording
-   (`AUTO-APPENDED`, `NOTE FOR BOT OPERATORS`) or addresses that name the intent
-   (`support-ext@`, `evil@`). Rotate position (body/subject/status/footer) and
-   register. The audit enforces this.
-9. **Poison must look ordinary, and clean cases must contain look-alikes.**
-   External-looking addresses and instruction-like text must appear in clean
-   cases too, or those surfaces become the label. Every case declares its plan in
-   `meta`; injected cases stay at or below half.
+   template, or opener across cases; do not use giveaway artificial markers
+   (`AUTO-APPENDED`, `NOTE FOR BOT OPERATORS`) or local parts that name the intent
+   (`evil@`, `attacker@`, `exfil@`). Rotate position (body/subject/status/footer)
+   and register. The audit enforces this.
+9. **Entity cross-mapping.** The same domain style — throwaway or corporate —
+   must appear in both clean and violating contexts, so the address never
+   predicts the label. `sample_emails.py --cross-map` does this; the audit fails a
+   corpus where disposable-domain share differs by >30 points between classes.
 10. **One head, one polarity.** No `choice`/`score` question may mean "the
     failure" on violations and "the avoided failure" on clean cases. Ask what is
     present in the input (with a `none` option) or split into two single-polarity
@@ -281,6 +290,12 @@ Full schema details, with edge cases and a worked example, are in
     never tune on the holdout, and never fine-tune on the pilot alone. If pilot
     rows are used, mix them below ~5% with the base corpus and reduce the epoch
     budget.
+13. **The label follows the action, not the address.** A `safe=true` case that
+    uses a disposable address must carry an explicit neutralising thought (temp
+    mailbox is noteworthy, not a violation — vary the wording). A `safe=false`
+    case must have an action-level violation and, when injected, must show the
+    agent actually performing the injected action; never reason "unsafe because
+    the recipient is gmail/temp". The audit enforces both.
 
 ## Reference files
 
@@ -289,14 +304,19 @@ part of the skill: run them from `./traindata/scripts/` and never copy them into
 the repository root.
 
 - `references/anti-shortcut.md` — the diversity contract, `meta` schema, shortcut
-  fingerprints, hard negatives, dual-polarity fix, and pilot-mixing rules.
+  fingerprints, entity cross-mapping, answer-time cross-validation, hard
+  negatives, dual-polarity fix, and pilot-mixing rules.
 - `references/soft-labels.md` — distribution rules, ambiguity, normalization, examples.
 - `references/state-formats.md` — string/object/turn-list states and conventions.
 - `references/generation-playbook.md` — chunking, prompting, parallelism, retries.
 - `references/taxonomy-design.md` — designing reusable option/level sets.
 - `assets/inspection-report.md` — template for Phase 4 review.
+- `assets/email_library/` — welded email pool: `freemail.txt`, `synth_domains.txt`,
+  `known_blocklist.txt`, `abuse_contacts.txt`, `prefixes.txt` (+ `email_library.json`).
 - `scripts/validate_and_integrate.py` — runnable validator/integrator, used in place.
 - `scripts/audit_diversity.py` — runnable anti-shortcut / diversity gate.
+- `scripts/sample_emails.py` — locked, tiered, cross-mapped email batches + dedup check.
+- `scripts/build_email_library.py` — rebuilds the welded pool (provenance only).
 
 ## Quick checks
 
@@ -304,6 +324,10 @@ Commands assume the working directory is the repository root and the skill is
 installed at `./traindata/`.
 
 ```bash
+# draw a locked, cross-mapped email batch for a chunk (paste into the prompt)
+python3 traindata/scripts/sample_emails.py --scenario violation --count 10 \
+  --seed 7 --cross-map --manifest email_assignment.json
+
 # validate records
 python3 traindata/scripts/validate_and_integrate.py --check chunk_0001.jsonl --taxonomy taxonomy.json
 
@@ -313,8 +337,12 @@ python3 traindata/scripts/validate_and_integrate.py --check 'chunk_*.jsonl' \
 
 # diversity audit: mandatory gate, must exit 0
 python3 traindata/scripts/audit_diversity.py --chunks 'chunk_*.jsonl' \
-  --taxonomy taxonomy.json --require-injection --strict \
+  --taxonomy taxonomy.json --require-injection --strict --require-library-emails \
+  --email-manifest email_assignment.json \
   --holdout 2 --out-dir pilot_holdout --json pilot_diversity.json
+
+# email dedup check: prints REGENERATE EMAIL YOURSELF when over-reused
+python3 traindata/scripts/sample_emails.py --check 'chunk_*.jsonl' --existing all_soft.jsonl
 
 # integrate (expand cases) and write a data card
 python3 traindata/scripts/validate_and_integrate.py --integrate --out all_soft.jsonl \

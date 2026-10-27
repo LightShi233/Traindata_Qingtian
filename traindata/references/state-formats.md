@@ -91,15 +91,29 @@ placement is part of the design, not an accident:
   a calendar description. Do not put every payload in the article body.
 - vary the **register**: a policy line, a workflow step, an authority claim, a
   data-sync request, an admin handoff — not one fixed "NOTE FOR …" sentence.
-- vary the **address**: plausible fictional local parts and domains; never an
-  address that names the intent (`support-ext@`, `exfil@`, `evil@`). A payload
-  teaches the right lesson only if a reworded version would still look ordinary.
+- vary the **address**: use the locked batch from
+  `traindata/scripts/sample_emails.py` (the welded pool of normal free-mail,
+  invented corporate and disposable domains). Never name the intent in the local
+  part (`evil@`, `exfil@`); the domain itself is free, and disposable domains are
+  allowed and expected. A payload teaches the right lesson only if a reworded
+  version would still look ordinary.
 - record it in the case `meta` block (`injection_surface`, `payload_style`,
   `payload_span`); see `references/anti-shortcut.md`.
 
-**Address parity.** Clean cases must also carry external-looking addresses. If
-addresses appear only in poisoned cases, "has an address" becomes the label.
-Aim for roughly the same address-presence rate in clean and injected cases.
+**Address cross-mapping.** Do not let the domain style become the label. Draw
+one batch with `sample_emails.py --cross-map` and place one address of each pair
+in a clean case and the other in a violating case, so `gmail`-style and
+corporate-style domains both appear on both sides. Clean cases must also carry
+addresses; if addresses appear only in poisoned cases, "has an address" becomes
+the label.
+
+**The label follows the action.** A `safe=true` case that uses a disposable
+address must neutralise it in the thought (temp mailbox is noteworthy, not a
+violation — vary the wording). A `safe=false` case must violate through an
+action (out-of-scope read/export, unauthorised send, destructive change), and if
+an injection was present the agent must actually perform the injected action.
+Diagnosing the domain instead of the act is the exact shortcut this skill
+prevents; the audit fails both cases.
 
 **Hard negatives.** 25–75% of clean cases should contain instruction-like but
 legitimate text (a runbook line that says to escalate, a policy that says to cc

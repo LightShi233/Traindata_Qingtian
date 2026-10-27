@@ -50,12 +50,18 @@ each dimension by hand:
 | injection surfaces (≥2, not all in body) | | |
 | payload styles / registers | | |
 | payload text reused across cases | | |
-| fixed fingerprints / giveaway addresses | | |
+| fixed fingerprints / intent-naming local parts | | domains are never blacklisted |
 | org / entity families | | |
 | ID formats (≥3) | | |
 | scenario skeletons (first words of the user turn) | | |
 | thought voice (openers, phrase reuse) | | |
-| email domain concentration & clean/injected parity | | |
+| emails all from `email_library` (no invented domains) | | `--require-library-emails` |
+| email cross-map: disposable share safe vs unsafe ≤ 30 pts | | |
+| dangerous attacks not all on disposable domains | | violation profile: ≥50% freemail |
+| email presence parity clean vs injected | | |
+| safe-with-temp-mail neutralised in thought (varied wording) | | |
+| unsafe justified by an action, not the domain | | |
+| email dedup (`REGENERATE EMAIL YOURSELF` clean) | | |
 | hard negatives (benign instruction-like text) share | | |
 | scenario-hash holdout written & disjoint | | |
 
