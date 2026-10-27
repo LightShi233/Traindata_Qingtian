@@ -100,14 +100,53 @@ def normalise_case(case, where):
     return errors
 
 
-def validate_cases(cases, taxonomy):
+def validate_cases(cases, taxonomy, ruhui_max_len=0):
     args = argparse.Namespace(
-        min_len=0, max_len=0, leak_index=None, intra=0, taxonomy=taxonomy)
+        min_len=0, max_len=0, leak_index=None, intra=0, taxonomy=taxonomy,
+        ruhui_max_len=ruhui_max_len)
     state = vi.new_state()
     errors = []
     for where, case in cases:
         errors.extend(vi.check_case(case, where, args, state))
     return errors
+
+
+def convert(paths, taxonomy=None, expand=False, deadline=None, force_validate=False,
+            ruhui_max_len=0):
+    """Convert YAML case files to text payload.
+
+    Returns ``(payload, summary, errors)``. ``payload`` is ``None`` when there
+    are errors; callers must treat that as fail-closed and write nothing. This
+    is the single conversion path shared by the CLI and ``data_writer.py``.
+    """
+    deadline = deadline or Deadline(0)
+    cases, load_errors, skipped = load_cases(paths, deadline)
+    errors = list(load_errors)
+    for where, case in cases:
+        errors.extend(normalise_case(case, where))
+    if not errors and (taxonomy or force_validate):
+        errors.extend(validate_cases(cases, taxonomy, ruhui_max_len))
+    if skipped:
+        errors.append(f"{skipped} 行是记录形式（无 turns），不是 case 形式；"
+                      "请提供每场景一行的 case")
+    if expand and not taxonomy:
+        errors.append("--expand 需要 --taxonomy")
+    deadline.check("conversion")
+    if errors:
+        return None, None, errors
+    try:
+        if expand:
+            rows = []
+            for index, (_, case) in enumerate(cases):
+                rows.extend(vi.expand_case(case, index, taxonomy))
+            payload = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+            summary = f"{len(cases)} cases -> {len(rows)} records"
+        else:
+            payload = "".join(json.dumps(c, ensure_ascii=False) + "\n" for _, c in cases)
+            summary = f"{len(cases)} cases"
+    except (KeyError, ValueError) as exc:
+        return None, None, [f"展开失败: {exc}；请确认 taxonomy 与 case 标签一致"]
+    return payload, summary, []
 
 
 def main():
@@ -148,20 +187,13 @@ def main():
             return 1
 
     try:
-        cases, load_errors, skipped = load_cases(paths, deadline)
-        errors = list(load_errors)
-        for where, case in cases:
-            errors.extend(normalise_case(case, where))
-        if not errors and (taxonomy or args.check):
-            errors.extend(validate_cases(cases, taxonomy))
-        deadline.check("conversion")
+        payload, summary, errors = convert(
+            paths, taxonomy, args.expand, deadline,
+            force_validate=args.check or bool(taxonomy))
     except TimeoutError as exc:
         print(f"TIMEOUT: {exc}", file=sys.stderr)
         return 3
 
-    if skipped:
-        errors.append(f"{skipped} 行是记录形式（无 turns），不是 case 形式；"
-                      "请提供每场景一行的 case")
     if errors:
         print(f"YAML 转换失败 ({len(errors)} errors)")
         for err in errors[:40]:
@@ -169,20 +201,6 @@ def main():
         if len(errors) > 40:
             print(f" ... 还有 {len(errors) - 40} 条")
         print("未写入任何文件（fail-closed）。修好 YAML 后重跑；不要手改 JSONL。")
-        return 1
-
-    try:
-        if args.expand:
-            rows = []
-            for index, (_, case) in enumerate(cases):
-                rows.extend(vi.expand_case(case, index, taxonomy))
-            payload = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
-            summary = f"{len(cases)} cases -> {len(rows)} records"
-        else:
-            payload = "".join(json.dumps(c, ensure_ascii=False) + "\n" for _, c in cases)
-            summary = f"{len(cases)} cases"
-    except (KeyError, ValueError) as exc:
-        print(f"展开失败: {exc}；请确认 taxonomy 与 case 标签一致", file=sys.stderr)
         return 1
 
     if args.check:
