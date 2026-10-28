@@ -379,6 +379,22 @@ def cmd_allocate(args):
             manifest["salted_prompt_sha256"] = hashlib.sha256(
                 text.encode()).hexdigest()
             manifest["salted_prompt_registered_at"] = _now()
+        if args.email_manifest:
+            # Snapshot the batch into the manifest: write() then verifies against
+            # it without depending on the file still being where it was, and the
+            # round remains auditable later.
+            try:
+                with open(args.email_manifest, encoding="utf-8") as f:
+                    batch_doc = json.load(f)
+            except (OSError, json.JSONDecodeError) as exc:
+                raise SystemExit(f"email manifest 无法读取: {args.email_manifest}: {exc}")
+            batch = [str(e) for e in batch_doc.get("emails", [])]
+            if not batch:
+                raise SystemExit(f"{args.email_manifest} 里没有 emails；"
+                                 "用 sample_emails.py --cross-map --manifest 生成")
+            manifest["email_batch"] = batch
+            manifest["email_manifest_source"] = os.path.abspath(args.email_manifest)
+            manifest["email_batch_registered_at"] = _now()
         used = chunk_numbers(os.path.join(data_dir, "chunks"))
         used |= chunk_numbers(os.path.join(data_dir, "inbox"))
         used |= all_allocated_numbers(data_dir)
@@ -419,6 +435,30 @@ def cmd_allocate(args):
 # --------------------------------------------------------------------------- #
 # write
 # --------------------------------------------------------------------------- #
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+
+def check_locked_emails(payload, manifest, name):
+    """Every address in the chunk must come from the round's locked batch.
+
+    Hand-picking domains (``grep`` against the library files) bypasses the
+    stratified weighting and the cross-map, so the label starts tracking the
+    domain. The batch is what makes an address meaningless as a signal; without
+    a registered batch there is nothing to verify, and the chunk is refused.
+    """
+    allowed = {str(e).lower() for e in manifest.get("email_batch", [])}
+    if not allowed:
+        return [f"{name}: 本轮没有登记邮箱批次。地址必须来自 "
+                "sample_emails.py --cross-map 的输出，并通过 "
+                "allocate --email-manifest 登记；禁止自己挑域名"]
+    used = {e.lower() for e in EMAIL_RE.findall(payload)}
+    off = sorted(used - allowed)
+    if off:
+        return [f"{name}: {len(off)} 个地址不在锁定批次内（例：{off[:5]}）。"
+                "禁止 grep 邮箱库或自选域名：必须用 sample_emails.py 的输出原样写入"]
+    return []
+
+
 def stamp_salt(payload, manifest):
     """Replace any model-authored salt claim with a host attestation.
 
@@ -499,6 +539,11 @@ def cmd_write(args):
     except TimeoutError as exc:
         print(f"TIMEOUT: {exc}", file=sys.stderr)
         return 3
+    # Addresses must come from the round's locked batch. Checked here, at write
+    # time, rather than only in the audit: a generator that greps the email
+    # library and picks domains by hand never has to run the audit, so the
+    # check would never fire.
+    errors.extend(check_locked_emails(payload, manifest, args.name))
     if errors:
         print(f"{args.name} 拒绝写入 ({len(errors)} errors)")
         for err in errors[:40]:
@@ -745,13 +790,24 @@ BRIEF = """\
 === traindata 速查（agent 照此执行，无需阅读脚本源码）===
 
 流程（每轮固定，不要自造步骤）：
-  1. allocate --count N   -> 打印 N 个 data/inbox/chunk_NNNN.yaml 槽位
+  0. sample_emails.py --scenario <safe|violation> --count N --cross-map \
+       --manifest <path> --ledger <path>     -> 冻结的地址批次（原样使用）
+  1. allocate --count N --email-manifest <path> [--salted-prompt <path>]
+                          -> 打印 N 个 data/inbox/chunk_NNNN.yaml 槽位
   2. 把纯 YAML 写到那些槽位（不要写 jsonl、不要写别的路径）
   3. write --round <id> --name chunk_NNNN --in <那个 yaml>
   4. merge --round <id>
   5. check --round <id> --strict
   超时由脚本判定：warn 收尾，stop 用 salvage --commit 交付已完成部分。
   脚本退出码是唯一权威：0 通过，非 0 未通过。不要改检查来让它变绿。
+
+地址规则（最容易被绕过的一条）：
+  地址只能来自第 0 步的批次，并原样写进样本。
+  严禁 grep / cat / 读取 traindata/assets/email_library/ 下的任何文件，
+  严禁自己挑域名或判断"这个域名安全不安全"——那是分层加权和 cross-map 的事。
+  理由：库里 28 万行 blocklist、21 万行姓名，逐个 grep 既慢又毫无意义；
+  而且手工挑选会破坏"域名不再是标签信号"这个设计。
+  write 会校验：本轮未登记批次则拒绝；样本出现批次外地址则拒绝。
 
 YAML case 的最小形状（每个 case 一个映射）：
   traj_id / source_dataset / safe(bool)
@@ -951,6 +1007,9 @@ def main():
     allocate.add_argument("--salted-prompt", default=None,
                           help="本轮实际发给模型的 salt.py 输出；只有登记了它，"
                                "write 才会为该 round 的 case 盖 meta.salted")
+    allocate.add_argument("--email-manifest", default=None,
+                          help="sample_emails.py --cross-map 生成的 assignment JSON；"
+                               "登记后该轮的地址必须全部来自这批，否则 write 拒绝")
     allocate.add_argument("--json", action="store_true")
     allocate.add_argument("--budget-hours", type=float, default=None,
                           help=f"本轮墙钟预算（小时，默认 {DEFAULT_BUDGET_HOURS:g}）；"
