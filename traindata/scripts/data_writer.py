@@ -47,6 +47,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -70,6 +71,82 @@ ROOT_PY_ALLOWED = set()  # this repo has no top-level Python entry point
 
 def _now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+# A generation round has a hard wall-clock budget. Past the warn mark the tool
+# starts telling the model to converge; past the stop mark it refuses new work
+# and points at `salvage`, so a half-finished round still ships what is good.
+DEFAULT_BUDGET_HOURS = 3.0
+DEFAULT_WARN_FRACTION = 0.75
+
+
+def _parse_ts(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed
+
+
+def round_clock(manifest):
+    """Time bookkeeping for a round: elapsed, remaining, and which tier we are in.
+
+    Tiers: ``ok`` (within budget), ``warn`` (past the warn mark — converge now),
+    ``stop`` (past the budget — no new work, salvage what exists).
+    """
+    started = _parse_ts(manifest.get("created_at"))
+    budget_hours = float(manifest.get("budget_hours", DEFAULT_BUDGET_HOURS))
+    if started is None:
+        return {"tier": "ok", "elapsed_s": 0.0, "remaining_s": budget_hours * 3600,
+                "budget_s": budget_hours * 3600, "warn_at_s": budget_hours * 3600 * DEFAULT_WARN_FRACTION}
+    now = datetime.datetime.now(datetime.timezone.utc)
+    elapsed = (now - started).total_seconds()
+    budget = budget_hours * 3600
+    warn_at = budget * float(manifest.get("warn_fraction", DEFAULT_WARN_FRACTION))
+    remaining = budget - elapsed
+    if elapsed >= budget:
+        tier = "stop"
+    elif elapsed >= warn_at:
+        tier = "warn"
+    else:
+        tier = "ok"
+    return {"tier": tier, "elapsed_s": elapsed, "remaining_s": remaining,
+            "budget_s": budget, "warn_at_s": warn_at}
+
+
+def _fmt_duration(seconds):
+    seconds = int(max(0, seconds))
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
+def timer_notice(manifest, round_id):
+    """Human/model-facing text for the current tier, or '' when on budget."""
+    clock = round_clock(manifest)
+    if clock["tier"] == "ok":
+        return ""
+    if clock["tier"] == "warn":
+        return (
+            f"⚠ TIME: round {round_id} 已用 {_fmt_duration(clock['elapsed_s'])}，"
+            f"预算 {_fmt_duration(clock['budget_s'])}，剩 {_fmt_duration(clock['remaining_s'])}。\n"
+            "  现在开始收尾：把正在进行的那份 YAML 写完，不要再开新场景。\n"
+            "  建议：python3 traindata/scripts/data_writer.py salvage --round "
+            f"{round_id} --taxonomy <taxonomy>")
+    return (
+        f"⛔ TIME UP: round {round_id} 已超出 {_fmt_duration(clock['budget_s'])} 预算"
+        f"（已用 {_fmt_duration(clock['elapsed_s'])}）。强制止损：不再接受新 chunk。\n"
+        "  立刻把已写好的部分转换、合并并提交：\n"
+        f"  python3 traindata/scripts/data_writer.py salvage --round {round_id} "
+        "--taxonomy <taxonomy> --commit")
 
 
 def _rel(data_dir, path):
@@ -199,6 +276,14 @@ def cmd_allocate(args):
                 "baseline": baseline_chunks(data_dir),
                 "allocations": [],
             }
+        if args.budget_hours is not None:
+            if args.budget_hours <= 0:
+                raise SystemExit("--budget-hours 必须为正数")
+            manifest["budget_hours"] = float(args.budget_hours)
+        if args.warn_fraction is not None:
+            if not 0.0 < args.warn_fraction < 1.0:
+                raise SystemExit("--warn-fraction 必须在 (0, 1) 之间，例如 0.75")
+            manifest["warn_fraction"] = float(args.warn_fraction)
         if args.salted_prompt:
             salted_prompt = require_under(os.path.abspath(args.salted_prompt),
                                           data_dir, "salted prompt")
@@ -234,10 +319,14 @@ def cmd_allocate(args):
 
     if args.json:
         print(json.dumps({"round": round_id, "manifest": _display(round_file(data_dir, round_id)),
+                          "clock": round_clock(manifest),
                           "allocations": allocated}, indent=2, ensure_ascii=False))
         return 0
     print(f"round: {round_id}")
     print(f"manifest: {_display(round_file(data_dir, round_id))}")
+    clock = round_clock(manifest)
+    print(f"budget: {_fmt_duration(clock['budget_s'])} "
+          f"(收尾提示在 {_fmt_duration(clock['warn_at_s'])})")
     for allocation in allocated:
         print(f"  {allocation['name']}  yaml={_display(_abs(data_dir, allocation['yaml']))}"
               f"  jsonl={_display(_abs(data_dir, allocation['jsonl']))}")
@@ -287,6 +376,17 @@ def cmd_write(args):
     manifest = load_round(data_dir, args.round)
     if manifest is None:
         raise SystemExit(f"没有这个 round: {args.round}；先运行 allocate")
+    notice = timer_notice(manifest, args.round)
+    if notice:
+        print(notice, file=sys.stderr)
+    # Past the budget no new case is accepted: the round must ship what already
+    # exists via `salvage` rather than grow further and ship nothing.
+    if round_clock(manifest)["tier"] == "stop":
+        print(f"⛔ round {args.round} 已超时，拒绝新 chunk {args.name}。"
+              f"用 salvage 把已完成的部分转换并提交：\n"
+              f"  python3 traindata/scripts/data_writer.py salvage --round {args.round} "
+              "--taxonomy data/taxonomy.json", file=sys.stderr)
+        return 1
     allocation = next((a for a in manifest["allocations"] if a["name"] == args.name), None)
     if allocation is None:
         raise SystemExit(f"{args.name} 不属于 round {args.round}；"
@@ -354,6 +454,124 @@ def cmd_write(args):
 
 
 # --------------------------------------------------------------------------- #
+# salvage
+# --------------------------------------------------------------------------- #
+def cmd_salvage(args):
+    """Convert whatever this round already produced and ship it.
+
+    This is the stop-loss path: when the clock runs out (or the run is about to
+    be killed), a half-finished round must still hand over every case that is
+    already valid instead of losing all of it. Pending slots whose YAML exists
+    and passes validation are written; ones that fail are reported and left
+    alone. Nothing new is accepted.
+    """
+    data_dir = os.path.abspath(args.data_dir)
+    manifest = load_round(data_dir, args.round)
+    if manifest is None:
+        raise SystemExit(f"没有这个 round: {args.round}")
+
+    clock = round_clock(manifest)
+    tier = clock["tier"]
+    print(f"salvage round {args.round}: 已用 {_fmt_duration(clock['elapsed_s'])}"
+          f" / 预算 {_fmt_duration(clock['budget_s'])}（{tier}）")
+
+    taxonomy = args.taxonomy or os.path.join(data_dir, "taxonomy.json")
+    if not os.path.exists(taxonomy):
+        raise SystemExit(f"taxonomy 不存在: {taxonomy}")
+    with open(taxonomy, encoding="utf-8-sig") as f:
+        taxonomy_obj = json.load(f)
+
+    converted, already, skipped = [], [], []
+    for allocation in manifest["allocations"]:
+        name = allocation["name"]
+        yaml_path = _abs(data_dir, allocation["yaml"])
+        jsonl_path = _abs(data_dir, allocation["jsonl"])
+        if allocation.get("status") == "written" and os.path.exists(jsonl_path):
+            already.append(name)
+            continue
+        if not os.path.exists(yaml_path):
+            continue  # never started; nothing to salvage
+        deadline = Deadline(args.timeout)
+        try:
+            payload, _summary, errors = y2j.convert(
+                [yaml_path], taxonomy_obj, expand=False, deadline=deadline,
+                force_validate=True, ruhui_max_len=args.ruhui_max_len)
+        except TimeoutError as exc:
+            skipped.append((name, f"timeout: {exc}"))
+            continue
+        if errors:
+            skipped.append((name, errors[0]))
+            continue
+        payload, _stripped = stamp_salt(payload, manifest)
+        atomic_write_text(jsonl_path, payload)
+        allocation.update({
+            "status": "written",
+            "written_at": _now(),
+            "salvaged": True,
+            "sha256": hashlib.sha256(payload.encode()).hexdigest(),
+            "cases": payload.count("\n"),
+        })
+        converted.append(name)
+
+    manifest["salvaged_at"] = _now()
+    manifest["salvage_tier"] = tier
+    manifest["updated_at"] = _now()
+    save_round(data_dir, manifest)
+
+    print(f"  已转换 {len(converted)}: {converted or '—'}")
+    print(f"  先前已完成 {len(already)}: {already or '—'}")
+    if skipped:
+        print(f"  跳过 {len(skipped)} 个（YAML 无效，未阻塞其余）：")
+        for name, reason in skipped:
+            print(f"    - {name}: {str(reason)[:110]}")
+
+    if not converted and not already:
+        print("没有可挽救的 chunk。")
+        return 1
+
+    merge_args = argparse.Namespace(
+        data_dir=data_dir, round=args.round, taxonomy=taxonomy, out=args.out,
+        timeout=args.timeout, ruhui_max_len=args.ruhui_max_len)
+    rc = cmd_merge(merge_args)
+    if rc != 0:
+        return rc
+
+    if args.commit:
+        return _commit_salvage(data_dir, args.round, converted + already)
+    print("\n未提交。确认无误后加 --commit，或手动提交上述文件。")
+    return 0
+
+
+def _commit_salvage(data_dir, round_id, names):
+    """Commit exactly this round's artifacts, nothing else."""
+    targets = [f"data/rounds/{round_id}.json"]
+    for name in names:
+        targets.append(f"data/inbox/{name}.yaml")
+        targets.append(f"data/chunks/{name}.jsonl")
+    targets.append(f"data/rounds/{round_id}/")
+    existing = [t for t in targets if os.path.exists(_abs(REPO_ROOT, t))]
+    if not existing:
+        print("没有可提交的文件。")
+        return 1
+    add = subprocess.run(["git", "add", "--"] + existing, cwd=REPO_ROOT,
+                         capture_output=True, text=True)
+    if add.returncode != 0:
+        print(f"git add 失败: {add.stderr.strip()}")
+        return 1
+    total = sum(a.get("cases", 0) for a in
+                (load_round(data_dir, round_id) or {}).get("allocations", []))
+    message = (f"data: salvage {len(names)} chunk(s) from round {round_id} "
+               f"after the time budget ({total} cases)")
+    commit = subprocess.run(["git", "commit", "-q", "-m", message], cwd=REPO_ROOT,
+                            capture_output=True, text=True)
+    if commit.returncode != 0:
+        print(f"git commit 失败: {commit.stderr.strip() or commit.stdout.strip()}")
+        return 1
+    print(f"已提交: {message}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # merge
 # --------------------------------------------------------------------------- #
 def cmd_merge(args):
@@ -361,6 +579,9 @@ def cmd_merge(args):
     manifest = load_round(data_dir, args.round)
     if manifest is None:
         raise SystemExit(f"没有这个 round: {args.round}")
+    notice = timer_notice(manifest, args.round)
+    if notice:
+        print(notice, file=sys.stderr)
 
     written = [a for a in manifest["allocations"] if a.get("status") == "written"]
     if not written:
@@ -508,6 +729,12 @@ def cmd_check(args):
         manifest = load_round(data_dir, args.round)
         if manifest is None:
             raise SystemExit(f"没有这个 round: {args.round}")
+        clock = round_clock(manifest)
+        if clock["tier"] != "ok":
+            add("WARN", "time",
+                f"round 已用 {_fmt_duration(clock['elapsed_s'])} / 预算 "
+                f"{_fmt_duration(clock['budget_s'])}（{clock['tier']}）；"
+                "先 salvage 已完成部分，不要再开新场景")
         baseline = set(manifest.get("baseline", []))
         allocated = {a["name"]: a for a in manifest["allocations"]}
         allocated_rel = set()
@@ -570,6 +797,11 @@ def main():
                           help="本轮实际发给模型的 salt.py 输出；只有登记了它，"
                                "write 才会为该 round 的 case 盖 meta.salted")
     allocate.add_argument("--json", action="store_true")
+    allocate.add_argument("--budget-hours", type=float, default=None,
+                          help=f"本轮墙钟预算（小时，默认 {DEFAULT_BUDGET_HOURS:g}）；"
+                               "超过即进入强制止损，write 拒绝新 chunk")
+    allocate.add_argument("--warn-fraction", type=float, default=None,
+                          help=f"收尾提示在预算的这个比例处触发（默认 {DEFAULT_WARN_FRACTION:g}）")
     allocate.set_defaults(func=cmd_allocate)
 
     write = sub.add_parser("write", help="把分配槽位里的 YAML 校验并写成 chunk JSONL")
@@ -591,6 +823,17 @@ def main():
     merge.add_argument("--ruhui-max-len", type=int, default=1024,
                        help="ruhui 训练窗口 token 数（默认 1024）；0 关闭 text 长度护栏")
     merge.set_defaults(func=cmd_merge)
+
+    salvage = sub.add_parser(
+        "salvage", help="止损：转换本轮已完成且合法的 YAML，合并并（可选）提交")
+    salvage.add_argument("--round", required=True)
+    salvage.add_argument("--taxonomy", default=None)
+    salvage.add_argument("--out", default=None)
+    salvage.add_argument("--timeout", type=float, default=0.0)
+    salvage.add_argument("--ruhui-max-len", type=int, default=1024)
+    salvage.add_argument("--commit", action="store_true",
+                         help="只暂存并提交本轮的 manifest/chunk/合并产物")
+    salvage.set_defaults(func=cmd_salvage)
 
     check = sub.add_parser("check", help="检查多余 chunk、临时文件、自造脚本")
     check.add_argument("--round", default=None)

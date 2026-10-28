@@ -383,6 +383,36 @@ leak/payload comparisons, and exits **3** on expiry. In a generation loop treat
 exit 3 like any other rejection: shrink the chunk or split it, then retry —
 never remove the timeout to get a pass. A typical chunk budget is 60–300s.
 
+### Round timer (3 hours) and stop-loss
+
+`--timeout` bounds one command. A **round** also has a wall clock, because a
+generation run that never converges ships nothing at all. `allocate` records
+`created_at` and a `budget_hours` (default **3**), and every later command
+recomputes the tier from it:
+
+| tier | when | what happens |
+| - | - | - |
+| `ok` | elapsed < 75% of budget | normal work |
+| `warn` | past 75% (`--warn-fraction`) | ⚠ notice on every command: finish the YAML in hand, start no new scenario |
+| `stop` | elapsed ≥ budget | ⛔ stop-loss: `write` **refuses new chunks**; only `salvage` runs |
+
+At `stop` the run must ship what exists, not keep building:
+
+```bash
+python3 traindata/scripts/data_writer.py salvage --round <id> \
+  --taxonomy data/taxonomy.json --commit
+```
+
+`salvage` converts every allocated slot whose YAML exists and validates,
+**skips** the ones that fail without blocking the rest, merges this round only,
+and with `--commit` stages exactly the round's manifest/chunks/merge output —
+never unrelated working-tree changes. It is the only sanctioned way to finish
+an over-budget round, and the only command that both writes and commits.
+
+Adjust per round with `allocate --budget-hours H --warn-fraction F`. Do not
+raise the budget to make a slow round pass; that is the same mistake as
+raising `--timeout`.
+
 ## Robust input handling
 
 The loaders accept what a model actually emits, without relaxing content rules:
@@ -488,6 +518,12 @@ are decoded with replacement instead of crashing. Outputs are written atomically
     `data_writer.py merge` (this round's manifest, never a glob), and commit no
     temp/backup files. Run `data_writer.py check --round <id> --strict` before
     handing the round off.
+20. **Respect the round timer; ship on stop.** A round has a 3-hour wall clock
+    by default. At `warn` finish the case in hand and open no new scenario; at
+    `stop` new `write` calls are refused and you must run
+    `data_writer.py salvage --round <id> --commit` so the finished part still
+    lands. A partial round committed is a success; a perfect round that ran
+    out of time and shipped nothing is a failure.
 
 ## Reference files
 
@@ -512,8 +548,10 @@ the repository root.
   `names_first.txt` / `names_last.txt` / `roles.txt`; `prefixes.txt` (curated);
   `email_library.json` / `prefix_vocab.json`; raw sources under `sources/`.
 - `scripts/data_writer.py` — the fixed writer: `allocate` (next names + YAML
-  slots), `write` (validate + convert into an allocated slot), `merge` (this
-  round only), `check` (stray chunks, temp files, model-authored scripts).
+  slots + round budget), `write` (validate + convert into an allocated slot),
+  `merge` (this round only), `salvage` (stop-loss: convert what exists, merge,
+  optionally commit), `check` (stray chunks, temp files, model-authored
+  scripts).
 - `scripts/yaml_to_jsonl.py` — YAML → validated case-form JSONL / records;
   normalises nested `action`/`content`, fail-closed, atomic writes.
 - `scripts/dataloader.py` — shared tolerant loader: JSONL/array/fence/BOM
