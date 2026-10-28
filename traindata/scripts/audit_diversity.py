@@ -302,6 +302,19 @@ def check_meta(cases, audit, args):
             for k in META_INJECTION:
                 if not isinstance(meta.get(k), str) or not meta.get(k).strip():
                     audit.fail("meta", f"{where}: injection_present=true 时 meta.{k} 必填")
+            # The span is the anchor every later check uses: action attribution
+            # decides "did the agent carry out the injection" from it, payload
+            # dedup and location checks scan it. A model that declares a payload
+            # it never wrote (or misquotes it) makes all of them vacuous, so
+            # require the declared substring to really occur, exactly.
+            span = meta.get("payload_span")
+            if isinstance(span, str) and span.strip():
+                # Compare against the decoded strings, not json.dumps: a span
+                # containing a quote is escaped in the serialized env turn, and
+                # a raw substring test would reject a perfectly literal payload.
+                if not any(span in s for _, _, _, s in turn_strings(c["turns"])):
+                    audit.fail("meta", f"{where}: payload_span 不在 text 中；"
+                                       "声明的载荷必须是轨迹里逐字出现的子串")
         else:
             if meta.get("payload_span"):
                 audit.fail("meta", f"{where}: injection_present=false 却声明了 payload_span")
