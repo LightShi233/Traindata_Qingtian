@@ -47,6 +47,15 @@ jobs:
                严禁新增任何 .py 脚本（尤其是 author.py / gen.py 之类的生成器）：
                工具已经现成，你只负责输出 YAML 并调用 traindata/scripts/data_writer.py。
 
+            1.1 规则从哪里看（重要）：
+               开工前先运行 python3 traindata/scripts/data_writer.py brief，
+               它会打印流程、YAML 字段和最常见被拒原因。
+               需要细节时读 traindata/SKILL.md 和 traindata/references/*.md。
+               不要去读 traindata/scripts/ 下的实现源码（dataloader.py、data_writer.py 等）：
+               那是工具内部，读它既不会告诉你该写什么，也容易让你跑去改它。
+               如果 brief 和文档没覆盖你的疑问，就按脚本的报错信息修数据并重跑，
+               而不是翻源码猜。
+
             2. 先用 data_writer.py allocate --count N 领取文件名，把纯 YAML 写到它打印的
                data/inbox/chunk_NNNN.yaml（action 写成映射、长文本用 | 块标量），
                再执行 data_writer.py write 转换。严禁手写、手改或另存 jsonl。
