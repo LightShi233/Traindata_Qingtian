@@ -207,12 +207,19 @@ def turn_strings(turns):
                     yield role, i, path, s
 
 
+# A turn's raw text lives under ``content``, but ``injection_surface`` names the
+# *semantic* position ("body", "subject", ...). A plain-text email body is
+# stored as ``content``, so reporting the raw key would reject the documented
+# value; map the envelope keys to what the docs call them.
+SURFACE_ALIASES = {"content": "body"}
+
+
 def surface_of(path):
     """Deepest non-index key that contains the string."""
     for part in reversed(path):
         if isinstance(part, str) and part != "<json>":
-            return part
-    return "content"
+            return SURFACE_ALIASES.get(part, part)
+    return "body"
 
 
 def emails(text):
