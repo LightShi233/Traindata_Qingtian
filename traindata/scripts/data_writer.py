@@ -57,8 +57,32 @@ import validate_and_integrate as vi  # noqa: E402
 import yaml_to_jsonl as y2j  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
-DEFAULT_DATA = os.path.join(REPO_ROOT, "data")
+
+
+def _find_repo_root(start):
+    """Walk up to the project root, or None when this skill is installed alone.
+
+    Installed under ``~/.zcode/skills/`` the script's grandparent is the skills
+    directory, not a project — defaulting ``data/`` there would write training
+    data into the skill installation. A project root is the nearest ancestor
+    holding ``.git`` or the skill's own ``traindata/`` parent marker.
+    """
+    current = start
+    for _ in range(6):
+        if os.path.exists(os.path.join(current, ".git")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
+REPO_ROOT = _find_repo_root(HERE)
+# With a project checkout, data/ sits at its root as the docs promise. A
+# standalone install (no .git ancestor) has no project data dir: --data-dir is
+# then mandatory, instead of silently dropping a corpus into the caller's cwd.
+DEFAULT_DATA = os.path.join(REPO_ROOT, "data") if REPO_ROOT else None
 
 CHUNK_RE = re.compile(r"^chunk_(\d{4,})\.(jsonl|yaml|yml)$")
 ROUND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
@@ -154,13 +178,14 @@ def _rel(data_dir, path):
 
 
 def _display(path):
-    """Repo-relative when inside the repo, absolute otherwise."""
+    """Repo-relative when inside a project checkout, absolute otherwise."""
     absolute = os.path.abspath(path)
-    try:
-        if os.path.commonpath([absolute, REPO_ROOT]) == REPO_ROOT:
-            return os.path.relpath(absolute, REPO_ROOT)
-    except ValueError:
-        pass
+    if REPO_ROOT:
+        try:
+            if os.path.commonpath([absolute, REPO_ROOT]) == REPO_ROOT:
+                return os.path.relpath(absolute, REPO_ROOT)
+        except ValueError:
+            pass
     return absolute
 
 
@@ -173,7 +198,7 @@ def require_under(path, data_dir, what):
     target = os.path.abspath(path)
     root = os.path.abspath(data_dir)
     if os.path.commonpath([target, root]) != root:
-        raise SystemExit(f"{what} 必须在 {os.path.relpath(root, REPO_ROOT)} 下，拒绝: {path}")
+        raise SystemExit(f"{what} 必须在 {_display(root)} 下，拒绝: {path}")
     return target
 
 
@@ -285,8 +310,9 @@ def cmd_allocate(args):
                 raise SystemExit("--warn-fraction 必须在 (0, 1) 之间，例如 0.75")
             manifest["warn_fraction"] = float(args.warn_fraction)
         if args.salted_prompt:
-            salted_prompt = require_under(os.path.abspath(args.salted_prompt),
-                                          data_dir, "salted prompt")
+            # The prompt is an input, not an output: it legitimately lives
+            # beside the run (a harness temp dir) rather than inside data/.
+            salted_prompt = os.path.abspath(args.salted_prompt)
             if not os.path.exists(salted_prompt):
                 raise SystemExit(f"salted prompt 不存在: {salted_prompt}")
             text = read_text(salted_prompt)
@@ -544,11 +570,15 @@ def cmd_salvage(args):
 
 def _commit_salvage(data_dir, round_id, names):
     """Commit exactly this round's artifacts, nothing else."""
-    targets = [f"data/rounds/{round_id}.json"]
+    if not REPO_ROOT:
+        print("当前目录不是 git 仓库，无法 --commit；请手动提交上述文件。")
+        return 1
+    rel_data = os.path.relpath(os.path.abspath(data_dir), REPO_ROOT).replace(os.sep, "/")
+    targets = [f"{rel_data}/rounds/{round_id}.json"]
     for name in names:
-        targets.append(f"data/inbox/{name}.yaml")
-        targets.append(f"data/chunks/{name}.jsonl")
-    targets.append(f"data/rounds/{round_id}/")
+        targets.append(f"{rel_data}/inbox/{name}.yaml")
+        targets.append(f"{rel_data}/chunks/{name}.jsonl")
+    targets.append(f"{rel_data}/rounds/{round_id}/")
     existing = [t for t in targets if os.path.exists(_abs(REPO_ROOT, t))]
     if not existing:
         print("没有可提交的文件。")
@@ -700,8 +730,9 @@ def cmd_check(args):
     # A model that ignores the rule tends to drop its generator at the repo
     # root. Only applied to the repo's own data dir so a temp-dir test run
     # does not inspect the developer's checkout.
-    if (args.round and os.path.abspath(data_dir) == os.path.abspath(DEFAULT_DATA)
-            and os.path.isdir(REPO_ROOT)):
+    if (args.round and DEFAULT_DATA
+            and os.path.abspath(data_dir) == os.path.abspath(DEFAULT_DATA)
+            and REPO_ROOT and os.path.isdir(REPO_ROOT)):
         for name in sorted(os.listdir(REPO_ROOT)):
             path = os.path.join(REPO_ROOT, name)
             if os.path.isfile(path) and name.endswith(".py") and name not in ROOT_PY_ALLOWED:
@@ -786,7 +817,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data-dir", default=DEFAULT_DATA,
-                        help="数据根目录（默认仓库下 data/）；所有读写都被限制在其中")
+                        help="数据根目录（仓库内默认 data/；独立安装时必须显式给出）")
     sub = parser.add_subparsers(dest="command", required=True)
 
     allocate = sub.add_parser("allocate", help="分配本轮的 chunk 名字与 YAML 槽位")
@@ -842,6 +873,9 @@ def main():
     check.set_defaults(func=cmd_check)
 
     args = parser.parse_args()
+    if not args.data_dir:
+        raise SystemExit("找不到项目根（无 .git 祖先）。独立安装时必须指定 --data-dir，"
+                         "例如 --data-dir ./data")
     if not os.path.isdir(args.data_dir):
         # allocate bootstraps a fresh data dir; every other command needs one.
         if args.command == "allocate":
