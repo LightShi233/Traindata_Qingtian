@@ -30,15 +30,28 @@ jobs:
           use_github_token: true
           prompt: |
             安装并使用 ./traindata skill 为Ruhui编写训练数据。
+
+            第 0 条（元规则，优先于以下所有条款）：
+            脚本是唯一权威。data_writer.py / validate_and_integrate.py / audit_diversity.py /
+            salt.py 的退出码就是判定结果：0 才算通过，非 0 就是没通过。
+            - 你必须服从脚本结论，不得改写、绕过、注释掉或放宽任何检查来让它变绿。
+            - 不得用自己的判断、自述或"我认为已经修好了"代替脚本判定；
+              每次修复后必须重跑脚本，以退出码为准。
+            - 子代理同样受此约束：主代理必须要求每个子代理重跑对应脚本并回报退出码，
+              子代理自述"已完成/已验证"而无脚本退出码的，一律不予采信。
+            - 被脚本拒绝时，按它打印的提示修复数据并重跑；不得手改产物文件。
+
             硬性要求：
-            1. 只允许改动 ./data 目录；严禁修改 .github/、traindata/ 或任何已有源码。
+            1. 只允许改动选定的输出根目录（默认 ./data，必须在项目内），
+               严禁修改 .github/、traindata/ 或任何已有源码。
                严禁新增任何 .py 脚本（尤其是 author.py / gen.py 之类的生成器）：
                工具已经现成，你只负责输出 YAML 并调用 traindata/scripts/data_writer.py。
 
             2. 先用 data_writer.py allocate --count N 领取文件名，把纯 YAML 写到它打印的
                data/inbox/chunk_NNNN.yaml（action 写成映射、长文本用 | 块标量），
                再执行 data_writer.py write 转换。严禁手写、手改或另存 jsonl。
-               即使使用子代理，也由主代理统一 allocate，子代理只写分配给它的 YAML 槽位。
+               即使使用子代理，也由主代理统一 allocate，子代理只写分配给它的 YAML 槽位；
+               子代理完成后必须自己跑 write 并回报退出码，主代理再独立复跑一次确认。
 
             3. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
                严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
