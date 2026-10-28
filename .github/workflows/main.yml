@@ -56,22 +56,32 @@ jobs:
                如果 brief 和文档没覆盖你的疑问，就按脚本的报错信息修数据并重跑，
                而不是翻源码猜。
 
-            2. 先用 data_writer.py allocate --count N 领取文件名，把纯 YAML 写到它打印的
+            2. 地址只能用 sample_emails.py 的输出：
+               先运行 sample_emails.py --scenario <safe|violation> --count N --cross-map
+               --manifest <path> --ledger <path> 拿到冻结批次，
+               再 allocate --count N --email-manifest <path> 登记它。
+               严禁 grep/cat/读取 traindata/assets/email_library/ 下任何文件，
+               严禁自己挑域名或用 bash 循环去查"某域名在不在黑名单"。
+               理由：那是 28 万行 blocklist，逐个 grep 既慢又没意义；
+               手工挑域名会绕过分层加权与 cross-map，让域名变成标签信号。
+               write 会拒绝：未登记批次，或样本里出现批次外地址。
+
+            3. 先用 data_writer.py allocate --count N 领取文件名，把纯 YAML 写到它打印的
                data/inbox/chunk_NNNN.yaml（action 写成映射、长文本用 | 块标量），
                再执行 data_writer.py write 转换。严禁手写、手改或另存 jsonl。
                即使使用子代理，也由主代理统一 allocate，子代理只写分配给它的 YAML 槽位；
                子代理完成后必须自己跑 write 并回报退出码，主代理再独立复跑一次确认。
 
-            3. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
+            4. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
                严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
 
-            4. 提交前必须运行 data_writer.py check --round <id> --strict 且通过；
+            5. 提交前必须运行 data_writer.py check --round <id> --strict 且通过；
                严禁提交任何临时/备份文件（.tmp-*、*.tmp、*.bak、__pycache__ 等）。
 
-            5. 转换与两个 gate 都要带 --timeout；退出码 3 表示该 chunk 未通过，
+            6. 转换与两个 gate 都要带 --timeout；退出码 3 表示该 chunk 未通过，
                缩小 chunk 重来，不要调大超时。
 
-            6. 计时器：本轮有 3 小时墙钟预算（allocate --budget-hours 可调）。
+            7. 计时器：本轮有 3 小时墙钟预算（allocate --budget-hours 可调）。
                命令会显示 ⚠/⛔ 计时提示：
                - ⚠ warn（超过 75%）：把手上这份 YAML 写完，不要再开新场景。
                - ⛔ stop（超过 3 小时）：write 会拒绝新 chunk。此时必须立即执行
@@ -79,7 +89,7 @@ jobs:
                  把已完成且合法的部分转换、合并并提交。半成品提交算成功，
                  跑满 3 小时却什么都没交是失败。
 
-            7. 完成后提交，开一个 PR 标题前缀为 [traindata_add]
-            8. 绝对严禁一次产出超过10个样本，但使用子代理，并且有相应验证时本规则例外
-            9. 特别强调多样性原则：用脚本检查，多样性不足时强制更改，或用子代理更改
+            8. 完成后提交，开一个 PR 标题前缀为 [traindata_add]
+            9. 绝对严禁一次产出超过10个样本，但使用子代理，并且有相应验证时本规则例外
+            10. 特别强调多样性原则：用脚本检查，多样性不足时强制更改，或用子代理更改
 

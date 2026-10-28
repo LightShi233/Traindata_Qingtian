@@ -344,8 +344,14 @@ the implementation under `scripts/` is not the contract — do not read it to
 work out what to generate, and never edit it.
 
 ```bash
-# 1. reserve names for this round; it prints the exact YAML slot for each
-python3 traindata/scripts/data_writer.py allocate --count 10 [--worker sub-3]
+# 0. freeze the address batch first — addresses come from here, nowhere else
+#    --count is the number of ADDRESSES, not cases
+python3 traindata/scripts/sample_emails.py --scenario violation --count 12 \
+  --cross-map --manifest emails.json --ledger ledger.txt
+
+# 1. reserve names for this round; register the batch so write() can verify
+python3 traindata/scripts/data_writer.py allocate --count 10 \
+  --email-manifest emails.json [--worker sub-3]
 #    -> round: r-2026...   chunk_0003  yaml=data/inbox/chunk_0003.yaml
 
 # 2. write the model's YAML to that exact path, then convert in place
@@ -456,11 +462,16 @@ are decoded with replacement instead of crashing. Outputs are written atomically
    and use its output verbatim; it must **not** read, grep, `cat`, or otherwise
    open `traindata/assets/email_library/*` itself, and must not invent
    addresses. The library is a probability model (tiers + weights + cross-map),
-   not a menu — reading it would skip the weighting. The audit treats the
-   `--manifest` as a **locked whitelist**, so hand-picked domains fail even when
-   they are in the pool. Do not exclude throwaway providers: sample them into
-   clean and violating cases alike. No real personal data, no real credentials,
-   no directly executable attack code.
+   not a menu — reading it would skip the weighting. Grepping it is also
+   useless: `known_blocklist.txt` is ~280k lines and `names_first.txt` ~216k,
+   so a per-domain `grep -qx` loop costs minutes of I/O and answers nothing the
+   weighted sampler did not already decide. The `--manifest` is a **locked
+   whitelist**, enforced in two places: `data_writer.py write` refuses a chunk
+   whose round registered no batch or that uses an off-batch address, and the
+   audit fails an address-bearing corpus with no `--email-manifest`. Do not
+   exclude throwaway providers: sample them into clean and violating cases
+   alike. No real personal data, no real credentials, no directly executable
+   attack code.
 6. **Keep the taxonomy stable.** Reuse option/level sets across records; a
    per-record invention defeats calibration.
 7. **Do not let labels collapse.** Both (or all) classes must carry meaningful
