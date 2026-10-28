@@ -337,6 +337,12 @@ only `true`/`false` become booleans.
 `scripts/data_writer.py` is the **only** writer. Do not invent a generator, do
 not write JSONL by hand, do not choose your own filenames.
 
+Start every run with `data_writer.py brief`: it prints the flow, the YAML field
+set, and the most common rejection reasons, so an agent needs neither the
+script sources nor a guess. Read `SKILL.md` and `references/*.md` for detail;
+the implementation under `scripts/` is not the contract — do not read it to
+work out what to generate, and never edit it.
+
 ```bash
 # 1. reserve names for this round; it prints the exact YAML slot for each
 python3 traindata/scripts/data_writer.py allocate --count 10 [--worker sub-3]
@@ -565,7 +571,7 @@ the repository root.
   slots + round budget), `write` (validate + convert into an allocated slot),
   `merge` (this round only), `salvage` (stop-loss: convert what exists, merge,
   optionally commit), `check` (stray chunks, temp files, model-authored
-  scripts).
+  scripts), `brief` (agent-facing cheat sheet), `list-dirs` (candidate roots).
 - `scripts/yaml_to_jsonl.py` — YAML → validated case-form JSONL / records;
   normalises nested `action`/`content`, fail-closed, atomic writes.
 - `scripts/dataloader.py` — shared tolerant loader: JSONL/array/fence/BOM
