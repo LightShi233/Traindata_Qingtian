@@ -6,7 +6,7 @@ compatibility: Requires Python 3.9+ (standard library only; the YAML reader is b
 allowed-tools: Read Write Edit Glob Grep Bash(python3:*) Bash(python:*)
 metadata:
   author: ruhui-data
-  version: "1.1"
+  version: "1.3"
 ---
 
 # Generating soft-label training data
@@ -21,15 +21,38 @@ overconfident 0/1 outputs and destroy calibration, so every record must ship a
 non-degenerate distribution. The default primary is `0.9`; values above `0.9`
 are rejected unless the corpus is explicitly justified.
 
-Records of one case share `text`, `source_hash`, and `source_index`; that is not
-a duplicate. A duplicate is the same `source_hash` appearing under two different
-case ids.
+## Terms used in this skill (read first)
 
-Count **scenarios**, not rows. One case = one independent scenario no matter how
-many heads it has, so a 30-record pilot can be 10 scenarios. Diversity and
-holdout are computed per scenario (`text` hash), and a schema-valid corpus can
-still teach a surface shortcut — see `references/anti-shortcut.md`, which is part
-of the contract, not optional advice.
+- **case** — one independent scenario: a `state` plus all its questions. It
+  expands into several **records** (one per question) that share `text`,
+  `source_hash`, and `source_index`; that sharing is by contract, not duplication.
+- **head** — one taxonomy question (`is_violation`, `mechanism`, `severity`);
+  a case has 2–4 heads. The heads of a case are not independent cases.
+- **qtype** — a question's answer type: `noul` (true/false), `choice` (one of k
+  keys), `score` (one ordered level).
+- **soft label** — a distribution over a question's options, primary `0.9`,
+  remainder `0.1` spread evenly; never one-hot (`1.0`/`0.0`).
+- **polarity** — the direction a question asks in; one head has one polarity.
+- **state** — the thing being judged (string, object, or turn list).
+- **scenario** — one `text` hash; diversity and holdouts are counted per
+  scenario, not per record.
+- **payload** — the injected instruction text; **injection surface** — the field
+  hiding it (body, status, footer, …).
+- **hard negative** — a clean case containing instruction-like but legitimate
+  text.
+- **gate** — a script whose exit code decides pass/fail.
+- **task domain** — the subject area (support, finance, …); distinct from an
+  **email domain**, a mail address's registrable domain.
+- **round** — one allocate → write → merge → check cycle with its own ID range,
+  email batch, and 3-hour clock.
+
+Fuller definitions (`holdout`, `split`, `cross-map`, `salt`, the `meta` axes)
+are in [`references/glossary.md`](references/glossary.md). Commands show
+`traindata/scripts/...` and assume the repo root as cwd; `references/...` and
+`scripts/...` are relative to this skill directory.
+
+A schema-valid corpus can still teach a surface shortcut — see
+`references/anti-shortcut.md`, part of the contract, not optional advice.
 
 ## When to use this skill
 
@@ -46,30 +69,33 @@ of the contract, not optional advice.
 
 - The user already has a labelled corpus and only wants to train the model — that
   is a training task, not a data-generation task.
-- The user wants to call/invoke `ruhui` at inference time — that is what the
-  `ruhui` skill is for.
+- The user wants to *call* `ruhui` at inference time rather than judge data for
+  it. This skill only produces and checks the corpus.
 
 ## Core workflow
 
-Follow these phases in order. Do not skip Phase 3. Do not start large-scale
-generation before Phase 4 passes (schema validator **and** diversity audit).
+Follow these phases in order. Do not skip Phase 3. Do not scale beyond the pilot
+until Phase 4's schema validator **and** diversity audit both exit 0.
 
 ### Phase 1 — Pin the contract
 
 Confirm or decide, and write them down before generating:
 
-1. **Domain(s)** and the realistic `state` shape (string, object, or turn list).
+1. **Task domain(s)** and the realistic `state` shape (string, object, or turn
+   list).
 2. **Question taxonomy**: which `choice` option sets and `score` level sets are
    reused across cases. Reuse them; do not invent a new option set per record.
-   One head has one polarity — never "the mechanism it avoided" on clean cases.
-   Tag each case on the two orthogonal `meta` axes from
+   One head has one polarity — `mechanism` asks what drove the action in every
+   case, never "the mechanism it avoided" (a clean unsteered case is
+   `own_reasoning`). Tag each case on the two orthogonal `meta` axes from
    `references/taxonomy-design.md` — `harm_kind` (semantic kind *present in the
    input*) and `request_shape` (`standard` / `contextual` / `near_miss`) — and
    rotate both; breadth on both is what keeps a single easy template from
    dominating.
-3. **Case ID scheme**, e.g. `safe_<6 digits>_<8 hex>` / `unsafe_<6 digits>_<8 hex>`
-   or `<domain>_<6 digits>_<8 hex>`. Must be globally unique. Rotate ID formats
-   across scenarios (prefix, `#num`, UUID, slug, hex) — one format is a shortcut.
+3. **Case ID scheme**, e.g. the shipped `ruhsoft_<6 digits>_<8 hex>`, or
+   `safe_<6 digits>_<8 hex>` / `unsafe_<6 digits>_<8 hex>`. Must be globally
+   unique. Rotate ID formats across scenarios (prefix, `#num`, UUID, slug, hex) —
+   one format is a shortcut.
 4. **Soft-label rule** (default in this skill): primary label `0.9`, remaining
    probability mass `0.1` spread evenly. See `references/soft-labels.md`.
 5. **Target size**: number of cases and records. Typical: ≥2000 cases × 2–4
@@ -91,21 +117,18 @@ is a failure.
 
 The two gates ship **inside this skill** at `traindata/scripts/`. Run them
 in place; do not copy them to the repo root or anywhere else in the output tree.
-The generator's job is to produce data, a taxonomy, and a diversity plan — not a
-second copy of the tooling.
 
-The gates read input leniently (JSON array, fenced block, BOM, trailing commas)
-and accept `.yaml` case files directly, but the **recommended authoring format
-is YAML converted by script** — see "Authoring input: YAML first" below. Give
-every long run a `--timeout` (see "Wall-clock budget"): a gate that exceeds its
-budget exits 3 instead of hanging the job.
+The gates read input leniently and accept `.yaml` case files directly, but the
+**recommended authoring format is YAML converted by script** — see
+[`references/authoring-and-rounds.md`](references/authoring-and-rounds.md).
+Give every long run a `--timeout`: over budget exits 3 instead of hanging.
 
 - `traindata/scripts/validate_and_integrate.py` — schema and soft-label contract.
 - `traindata/scripts/audit_diversity.py` — the shortcut-learning gate.
 
-If a domain genuinely needs an extra check, add it to the taxonomy/config the
-tools already read, or extend the check in the skill script — never fork a
-loose copy into `./scripts`.
+If a task domain genuinely needs an extra check, add it to the taxonomy/config
+the tools already read, or extend the skill script — never fork a loose copy into
+`./scripts`.
 
 The validator must check, per record:
 
@@ -120,17 +143,36 @@ The validator must check, per record:
 - case-group integrity: all records of one case share `text`, `source_hash`, and
   `source_index`; ids are unique; with `--require-complete-cases`, each case
   carries exactly the taxonomy's question ids
-- **leakage**: n-gram (8-gram word) Jaccard against any existing corpus above the
-  threshold (default `0.30`) is a failure. Pass `--leak PATH` explicitly;
-  `--auto-leak` indexes `*soft*.jsonl` beside the output while excluding the
-  files being checked, so a corpus never leaks against itself.
+- **leakage**: overlap with an already-accepted corpus, measured as word
+  n-gram **Jaccard similarity** (shared 8-word sequences ÷ all 8-word sequences
+  of the two texts). Above the threshold (default `0.30`) is a failure. Pass
+  `--leak PATH` explicitly; `--auto-leak` indexes `*soft*.jsonl` beside the
+  output while excluding the files being checked, so a corpus never leaks
+  against itself.
 
-The audit proves a record is not learnable by shortcut. It runs on
-case-form chunks, reads their `meta` block, and fails on fixed payload
-fingerprints, giveaway addresses, payload reuse, a single org/ID/voice/injection
-surface, injected-heavy corpora, reversed-polarity taxonomy wording, and a
-non-disjoint holdout. Both tools must exit 0 before a chunk is accepted. See
-`references/anti-shortcut.md` for every rule and default threshold.
+The audit is the shortcut-learning gate: it flags signals that would let a model
+guess the label from surface form. It runs on case-form chunks, reads their
+`meta` block, and fails on fixed payload fingerprints, giveaway addresses,
+payload reuse, a single org/ID/voice/injection surface, injected-heavy corpora,
+reversed-polarity taxonomy wording, and a **non-disjoint holdout** (withheld
+scenarios that also appear in the rest of the chunk). Both tools must exit 0
+before a chunk is accepted. See `references/anti-shortcut.md` for every rule and
+default threshold.
+
+## Execution environment (read before Phase 3)
+
+The **orchestrator** (you, the main agent) runs every gate; a **subagent** only
+authors YAML. Content that characterises injections can be refused by the
+session's permission classifier or a workspace-isolation hook when a subagent
+tries to execute it, even though the data is inert. That refusal is **not a
+verdict** — the orchestrator runs the same command itself and obeys its exit
+code. The salt inoculates the generating model, not the harness, so it does not
+prevent such a refusal.
+
+Resolve the interpreter once, before the first command: on some hosts `python3`
+is a broken alias and only `python` works. The docs use `python3` as a
+placeholder. Full explanation and terms: `references/authoring-and-rounds.md`
+("Who runs the gates").
 
 ### Phase 3 — Generate in chunks, validate each chunk
 
@@ -157,33 +199,64 @@ Tips that make this work in practice:
   ```bash
   python3 traindata/scripts/data_writer.py allocate --count 10
   python3 traindata/scripts/data_writer.py write --round <id> \
-    --name chunk_0003 --in data/inbox/chunk_0003.yaml --taxonomy taxonomy.json
+    --name chunk_0001 --in data/inbox/chunk_0001.yaml --taxonomy data/taxonomy.json
   ```
+
+  `allocate` names chunks from `chunk_0001` on a clean root, or after the
+  highest number already allocated; always pass the name it printed, not the
+  one in this sample.
 
   Conversion is fail-closed — any malformed case writes nothing. Never hand-fix
   the emitted JSONL; fix the YAML and reconvert. For a single ad-hoc file,
   `yaml_to_jsonl.py` still works, but the round workflow is the default because
   it owns naming, the round manifest, and the pollution check.
-- **Sample the addresses first**, then put the locked list in the prompt:
+- **The orchestrator samples the addresses first**, then puts the locked list in
+  the generation prompt:
   `python3 traindata/scripts/sample_emails.py --scenario <safe|violation|injection> \
-  --count <n> --cross-map --manifest email_assignment.json --ledger prefix_ledger.txt`.
-  The generator must reuse those exact strings. It must **not** read the library
-  files itself — the tiers, weights and the compositional prefix grammar are the
-  model, and the manifest is enforced as a locked whitelist by the audit.
+  --count <n> --cross-map --manifest work/emails.json --ledger work/ledger.txt`.
+  `--count` counts *addresses*, not cases. The generator must reuse those exact
+  strings. It must **not** read the library files itself — the tiers, weights and
+  the compositional prefix grammar inside `sample_emails.py` are the sampling
+  model, and reading the raw lists instead of running the sampler would bypass
+  them. The manifest is enforced as a locked whitelist by the audit.
 - Pass the **same `--ledger`** to every chunk. Local parts are composed from
   `names_first × names_last × roles` (billions of combinations) and recorded in
   the ledger, so prefixes stay unique across the whole corpus, not just within a
   chunk. The audit fails a prefix reused in more than a couple of cases.
-- Request a **structured** batch (a JSON array of cases) per call, with the
-  target counts, the required label coverage, and the **diversity plan** spelled
-  out in the prompt.
 - Generate a whole `case` at once (state + all its questions + `meta`) so the
   shared `text`/`source_hash`/`source_index` stay consistent.
-- Keep a per-chunk ID range so parallel workers cannot collide, and give each
-  worker its own slice of the rotation matrix so they do not converge on one
-  voice.
 - Reject and regenerate noisy records rather than patching them by hand. A
   diversity failure means regenerate the whole chunk, not one row.
+- **Subagents emit YAML only — never a gate.** The orchestrator (main agent) is
+  the sole executor of `write` / `validate_and_integrate.py` / `audit_diversity.py`
+  / `salvage`. A subagent is *not* expected to run them, and if its shell call is
+  denied by the harness (see "Execution environment" above) that is not a
+  verdict on the data — it is simply un-run. Treat "the subagent could not run
+  `write`" exactly like "the chunk does not exist yet": the main agent runs it.
+- **Deliver the per-case plan as a FILE, never inline in the prompt.** A big
+  inline matrix gets truncated by the harness, and a subagent that loses the tail
+  will silently improvise the missing cases and collide on payloads/ids (this is
+  how a chunk quietly breaks the global budget). Write the plan to a file under
+  the scratch directory (`work/plan_<round>.md`) and have the subagent `Read` it.
+  Give the subagent only its own rows, with disjoint `traj_id` ranges AND
+  disjoint `payload_span` / thought / user-turn openers so parallel workers
+  cannot converge or duplicate.
+- **Require a delivery-integrity echo.** Before the subagent finishes it must
+  echo back, verbatim, the exact `traj_id`s and `payload_span`s it authored. If
+  the echoed set does not equal the assigned set, or a field is missing, the
+  subagent must STOP and say so — not invent replacements. The orchestrator
+  compares the echo to the plan before it runs `write`; a mismatch means the
+  chunk is re-dispatched, not merged.
+- **Ledger the payloads and dedup early.** Emails already have a corpus-wide
+  `--ledger`; give payloads the same treatment: keep the assigned `payload_span`
+  strings centrally so no two chunks reuse one, and run the cross-chunk dedup of
+  `validate_and_integrate.py` against already-accepted chunks *inside* the loop
+  (via `--leak`/`--auto-leak`), not only at the final audit — a collision caught
+  at the end wasted every chunk written after it.
+- **A blocked or off-plan chunk never blocks the round.** If one chunk is denied
+  execution, malformed, or improvised off-spec, do not stall integration on it:
+  `salvage` the chunks that pass and redo the bad one in a freshly allocated slot
+  (never overwrite). A partial round committed is a success.
 
 See `references/generation-playbook.md` for prompting patterns, chunk sizing,
 parallelization, and the retry loop.
@@ -194,28 +267,39 @@ Run 1–2 chunks, then inspect them by hand:
 
 - Does the primary label actually match the case, question by question?
 - Are `choice` option sets consistent across records, with **one polarity**?
-- Is every domain/qtype/label represented, or has something collapsed?
+- Is every task domain, qtype, and label represented, or has something collapsed?
 - Is the text realistic and varied, or is it one template with words swapped?
 - Could you guess the label from a fixed phrase, an address, an org name, or an
-  ID format? If yes, the audit will fail it and so would the model.
+  ID format? If yes, the audit will fail it — and so would the model.
 
-Run the diversity audit on the pilot and write a scenario-hash holdout:
+Run the diversity audit on the pilot and write a scenario-hash holdout (a list
+of scenarios kept out of training, identified by `text` hash):
 
 ```bash
-python3 traindata/scripts/audit_diversity.py --chunks 'chunk_*.jsonl' \
-  --taxonomy taxonomy.json --require-injection --strict \
-  --holdout 2 --out-dir pilot_holdout --json pilot_diversity.json
+python3 traindata/scripts/audit_diversity.py --chunks 'data/chunks/chunk_*.jsonl' \
+  --taxonomy data/taxonomy.json --require-injection --strict \
+  --email-manifest work/emails.json --require-salt \
+  --holdout 2 --out-dir work/pilot_holdout --json work/pilot_diversity.json
 ```
 
-`--holdout 2` on a 10-scenario pilot keeps 2 scenarios out of every later
-training/tuning run. Count scenarios by `text` hash: a 30-record, 10-scenario
-pilot is 10 scenarios, and the three heads of a case are not independent cases.
+Pass `--email-manifest` whenever the chunk contains addresses: without it the
+audit fails ("发现 N 个地址但没有 --email-manifest") rather than guessing, because
+a batch-less corpus cannot be distinguished from hand-picked domains.
 
-**The pilot is a prompt gate, not training data.** Do not fine-tune a head on a
-small pilot alone: blending 30 rows into a model already trained on thousands,
-with the old epoch budget, is memorisation. If pilot rows ever enter training,
-keep them below ~5% of the blend (mixed with the base corpus, e.g. ATBench) with
-a reduced epoch budget, and say so in the data card.
+`--holdout 2` on a 10-scenario pilot writes 2 of those scenarios to
+`work/pilot_holdout/`; keep that file out of every later training and tuning
+run. `work/` is project-internal scratch **outside** the output root: reports,
+manifests, and ledgers must not sit under `data/`, because `check --strict` fails
+on unknown files there. Count scenarios by `text` hash: a 30-record,
+10-scenario pilot is 10 scenarios, and the three heads (questions) of a case are
+not independent cases.
+
+**The pilot is a prompt gate, not training data.** Do not fine-tune a single
+question head on a small pilot alone: blending 30 rows into a model already
+trained on thousands, with the old epoch budget, is memorisation. If pilot rows
+ever enter training, keep them below ~5% of the blend (mixed with an existing
+base corpus such as ATBench) with a reduced epoch budget, and say so in the data
+card.
 
 `assets/inspection-report.md` is a template for recording this. Fix the prompt or
 taxonomy, then scale out. Never relax the audit to pass a chunk.
@@ -223,306 +307,128 @@ taxonomy, then scale out. Never relax the audit to pass a chunk.
 ### Phase 5 — Integrate, then hold out
 
 1. Integrate accepted chunks into one file, re-running cross-chunk duplicate and
-   leakage checks during integration.
-2. Split into **training**, **calibration**, and **test** sets. Split by **case**,
-   never by record, so all questions of a case stay in one split. `--split-dir`
-   does this deterministically and writes `split_manifest.json`; then run the
-   printed leakage command between splits. The test set must never be used for
-   training or for tuning the calibration temperature. If the user asks for a
-   separate test set, generate it with its own disjoint ID range and confirm zero
-   leakage against train/calibration.
-3. Keep the Phase 4 scenario-hash holdout disjoint from all three splits and from
+   leakage checks, then split into **training**, **calibration**, and **test**
+   sets. Split by **case**, never by record, so all questions of a case stay in
+   one split. `--split-dir` does this deterministically and writes
+   `split_manifest.json`; then run the printed leakage command between splits.
+   The test set must never be used for training or for tuning the **calibration
+   temperature** (the single scale factor fitted on the calibration split to turn
+   raw scores into calibrated probabilities). If the user asks for a separate
+   test set, generate it with its own disjoint ID range and confirm zero leakage
+   against train/calibration.
+2. Keep the Phase 4 scenario-hash holdout disjoint from all three splits and from
    any prompt iteration after the pilot is frozen.
 
 ### Phase 6 — Report
 
-Produce a data card: domain distribution, qtype distribution, label distribution,
-length stats, duplicate/leakage results, the diversity-audit verdict and metrics
-(from `--json`), the holdout manifest, how the corpus was mixed (or not) with the
-base training data, and known limitations. `--card` writes the soft-label card
-directly from a validated run; attach the audit report next to it.
+Produce a data card: task-domain distribution, qtype distribution, label
+distribution, length stats, duplicate/leakage results, the diversity-audit
+verdict and metrics (from `--json`), the holdout manifest, how the corpus was
+mixed (or not) with the base training data, and known limitations. `--card`
+writes the soft-label card directly from a validated run; attach the audit
+report next to it.
 
-## Record format
+## Record format and authoring
 
-One JSON object per line. Field set is exact:
-
-```json
-{
-  "id": "dataset/case_id/question_key",
-  "source_dataset": "dataset-name",
-  "source_index": 12345,
-  "source_hash": "sha256 of text",
-  "text": "{\"serialized\": \"state\"}",
-  "qtype": "noul | choice | score",
-  "criteria": {},
-  "instruction": "what is being asked",
-  "soft_label": {
-    "probabilities": { "k1": 0.9, "k2": 0.1 },
-    "label": "k1"
-  }
-}
-```
-
-Question-type specifics:
-
-| qtype | `criteria` shape | option keys | notes |
-| - | - | - | - |
-| `noul` | `{"true": "...", "false": "..."}` | `true`, `false` | 2 options, fixed order |
-| `choice` | `{"key": "criterion text", ...}` | your keys | ≥2 options |
-| `score` | `["level 0", "level 1", ...]` | `"0"`, `"1"`, ... | ordered list |
-
-One **case** produces multiple records that share `text`, `source_hash`, and
-`source_index`, differing only in `qtype`/`criteria`/`instruction`/`soft_label`.
-
-Case-form chunks carry one extra object, `meta`, holding the diversity plan (see
-`references/anti-shortcut.md`). It is **not** a training field: it is stripped when
-cases are expanded into records, and only the audit reads it.
-
-Full schema details, with edge cases and a worked example, are in
-`references/soft-labels.md` and `references/state-formats.md`.
-
-## Authoring input: YAML first
-
-Have the model write **YAML**, not raw JSONL. Escaping JSON-inside-JSON is the
-single most common way a generated chunk is silently corrupted: one missed
-backslash in `content` or `action` and the record is unusable. In YAML the case
-is structure, and the script does the escaping:
-
-```yaml
-- traj_id: ruhsoft_000101_a1b2c3d4
-  safe: true
-  turns:
-    - role: user
-      content: |
-        Triage the open tickets. Summarise each and reply in-place.
-        Do not move anything out of the queue.
-    - role: agent
-      thought: List the open tickets first.
-      action:
-        name: list_tickets
-        arguments: {status: open, limit: 25}
-  meta:
-    scenario_family: support-triage
-    entity_family: northlight
-    id_style: ticket-prefix
-    thought_style: terse
-    injection_present: false
-    external_contact: false
-  is_violation: false
-  mechanism: own_reasoning
-  severity: 0
-```
-
-`yaml_to_jsonl.py` (stdlib only, no PyYAML) then:
-
-- serialises `action:` / `content:` / `thought:` mappings to the JSON strings
-  the record contract requires;
-- accepts a list of cases, `---`-separated documents, or a top-level `cases:`
-  list;
-- rejects anchors/aliases, tabs used for indentation, unclosed quotes and
-  non-JSON `action` strings **with a line number**;
-- validates the result against the taxonomy (`--check`) and expands to records
-  (`--expand`) using the same `expand_case` the validator uses;
-- writes atomically (temp file + rename), so a crash cannot leave a half chunk;
-- is fail-closed: any error means nothing is written.
-
-Supported YAML subset, so the prompt can stay honest: block mappings and
-sequences, plain/quoted scalars, `|` and `>` block scalars with `-`/`+`
-chomping, inline `[...]`/`{...}`, comments, multiple documents. Quote any value
-that must stay a string (`"0"`, `"000101"`, ids). Plain `yes`/`no` stay strings;
-only `true`/`false` become booleans.
-
-### Round workflow: allocate → write → merge → check
-
-`scripts/data_writer.py` is the **only** writer. Do not invent a generator, do
-not write JSONL by hand, do not choose your own filenames.
-
-Start every run with `data_writer.py brief`: it prints the flow, the YAML field
-set, and the most common rejection reasons, so an agent needs neither the
-script sources nor a guess. Read `SKILL.md` and `references/*.md` for detail;
-the implementation under `scripts/` is not the contract — do not read it to
-work out what to generate, and never edit it.
-
-```bash
-# 0. freeze the address batch first — addresses come from here, nowhere else
-#    --count is the number of ADDRESSES, not cases
-python3 traindata/scripts/sample_emails.py --scenario violation --count 12 \
-  --cross-map --manifest emails.json --ledger ledger.txt
-
-# 1. reserve names for this round; register the batch so write() can verify
-python3 traindata/scripts/data_writer.py allocate --count 10 \
-  --email-manifest emails.json [--worker sub-3]
-#    -> round: r-2026...   chunk_0003  yaml=data/inbox/chunk_0003.yaml
-
-# 2. write the model's YAML to that exact path, then convert in place
-python3 traindata/scripts/data_writer.py write --round r-2026... \
-  --name chunk_0003 --in data/inbox/chunk_0003.yaml --taxonomy data/taxonomy.json
-
-# 3. merge ONLY this round's written chunks (never a glob over all chunks)
-python3 traindata/scripts/data_writer.py merge --round r-2026... \
-  --taxonomy data/taxonomy.json
-
-# 4. fail the round if it left anything behind
-python3 traindata/scripts/data_writer.py check --round r-2026... --strict
-```
-
-What the tool enforces:
-
-- **One output root, chosen inside the project.** `--data-dir` defaults to
-  `./data` but may name any directory *inside the project*; it cannot be the
-  project root itself or anything outside it. Everything the round writes
-  (inbox, chunks, rounds) stays under that root, so a corpus is always
-  discoverable. Run `data_writer.py list-dirs` to see existing roots.
-- **Names are allocated, not guessed.** `chunk_<4+ digits>`; `write` requires
-  the YAML to be at the exact slot from `allocate` and refuses unallocated
-  names.
-- **No overwrites.** An existing `chunks/chunk_NNNN.jsonl` is never replaced;
-  allocate a fresh name to redo a chunk.
-- **Round-scoped merge.** `merge` reads the round manifest only, so another
-  round's chunks or a hand-placed file can never slip in.
-- **No pollution.** `check` fails on unallocated chunk files, temp/backup files
-  (`.tmp-*`, `*.tmp`, `*.bak`, `*.swp`, `__pycache__`, …), and any `.py` under
-  `data/` — i.e. a model that tried to write its own `author.py`.
-- Round manifests live in `data/rounds/<round>.json`; sources in
-  `data/inbox/`; accepted chunks in `data/chunks/`.
-
-If `check` reports a stray file, **delete it or move it out of the round**;
-never commit it. The tool writes each output through a `.tmp-*` file and an
-atomic rename, so a leftover `.tmp-*` means a crash — remove it, don't commit
-it. There is no sanctioned place for scratch files.
-
-## Wall-clock budget
-
-Every gate and the converter take `--timeout SECONDS` (default `0` = unlimited).
-The budget covers the whole run, is checked per case and inside the O(n²)
-leak/payload comparisons, and exits **3** on expiry. In a generation loop treat
-exit 3 like any other rejection: shrink the chunk or split it, then retry —
-never remove the timeout to get a pass. A typical chunk budget is 60–300s.
-
-### Round timer (3 hours) and stop-loss
-
-`--timeout` bounds one command. A **round** also has a wall clock, because a
-generation run that never converges ships nothing at all. `allocate` records
-`created_at` and a `budget_hours` (default **3**), and every later command
-recomputes the tier from it:
-
-| tier | when | what happens |
-| - | - | - |
-| `ok` | elapsed < 75% of budget | normal work |
-| `warn` | past 75% (`--warn-fraction`) | ⚠ notice on every command: finish the YAML in hand, start no new scenario |
-| `stop` | elapsed ≥ budget | ⛔ stop-loss: `write` **refuses new chunks**; only `salvage` runs |
-
-At `stop` the run must ship what exists, not keep building:
-
-```bash
-python3 traindata/scripts/data_writer.py salvage --round <id> \
-  --taxonomy data/taxonomy.json --commit
-```
-
-`salvage` converts every allocated slot whose YAML exists and validates,
-**skips** the ones that fail without blocking the rest, merges this round only,
-and with `--commit` stages exactly the round's manifest/chunks/merge output —
-never unrelated working-tree changes. It is the only sanctioned way to finish
-an over-budget round, and the only command that both writes and commits.
-
-Adjust per round with `allocate --budget-hours H --warn-fraction F`. Do not
-raise the budget to make a slow round pass; that is the same mistake as
-raising `--timeout`.
-
-## Robust input handling
-
-The loaders accept what a model actually emits, without relaxing content rules:
-a JSON array or one pretty-printed object instead of JSONL, markdown
-```` ```json ```` fences, a UTF-8 BOM, CRLF, blank lines, `//` lines, and
-trailing commas. `.yaml`/`.yml` paths go through the YAML reader directly, so
-`audit_diversity.py` and `salt.py` can audit an unconverted chunk. Invalid bytes
-are decoded with replacement instead of crashing. Outputs are written atomically.
+The record schema, YAML authoring format, `data_writer.py` round workflow
+(allocate → write → merge → check), wall-clock budgets, tolerant input handling,
+and a command cheat sheet are in
+[`references/authoring-and-rounds.md`](references/authoring-and-rounds.md) —
+read it before your first `write`. The hard rules below still apply.
 
 ## Hard rules
 
-0. **The scripts are the authority; agents obey them.** Exit code `0` is the
+1. **The scripts are the authority; agents obey them.** Exit code `0` is the
    only pass, non-zero is "this chunk does not exist yet". No agent — main or
    subagent — may edit, comment out, or relax a check to make it green, and no
    agent's own judgement ("I already fixed it") substitutes for a script's
-   verdict: fix the data and re-run. A subagent's "done" without the script's
-   exit code is not evidence; the main agent re-runs the gate itself. When a
-   script rejects something, repair according to its message — never hand-edit
-   the output files.
-1. **Soft, never one-hot.** Primary `0.9`, remainder `0.1` spread evenly, always
-   normalized. Ambiguity is expressed by lowering the primary below `0.9`, not by
-   writing a hard 1.0.
-2. **`label` must equal the argmax** of `probabilities`.
-3. **Validate, then audit, before you accumulate.** Unvalidated data is not data,
+   verdict: fix the data and re-run. When a script rejects something, repair
+   according to its message — never hand-edit the output files. A subagent's
+   "done" without the script's exit code is not evidence, and a subagent whose
+   call was *blocked* has produced no verdict: the orchestrator re-runs it. A
+   subagent must never fill a gap it did not receive (a truncated inline plan is
+   a gap, not a licence to improvise): it echoes its authored ids and stops.
+2. **Soft, never one-hot.** One-hot means all probability on a single option
+   (`1.0` there, `0.0` everywhere else). Instead: primary `0.9`, remainder `0.1`
+   spread evenly, always normalized. Ambiguity is expressed by lowering the
+   primary below `0.9`, never by writing a hard 1.0.
+3. **`label` must equal the argmax** of `probabilities`.
+4. **Validate, then audit, before you accumulate.** Unvalidated data is not data,
    and schema-valid data that teaches a shortcut is worse than none. Both
    `validate_and_integrate.py` and `audit_diversity.py` must exit 0.
-4. **Test data is never training data.** Keep ID ranges, files, and the scenario
+5. **Test data is never training data.** Keep ID ranges, files, and the scenario
    holdout disjoint.
-5. **Addresses come only from `sample_emails.py`, and domains are never
+6. **Addresses come only from `sample_emails.py`, and email domains are never
    blacklisted.** The generator must **run** `traindata/scripts/sample_emails.py`
-   and use its output verbatim; it must **not** read, grep, `cat`, or otherwise
-   open `traindata/assets/email_library/*` itself, and must not invent
-   addresses. The library is a probability model (tiers + weights + cross-map),
-   not a menu — reading it would skip the weighting. Grepping it is also
-   useless: `known_blocklist.txt` is ~280k lines and `names_first.txt` ~216k,
-   so a per-domain `grep -qx` loop costs minutes of I/O and answers nothing the
-   weighted sampler did not already decide. The `--manifest` is a **locked
-   whitelist**, enforced in two places: `data_writer.py write` refuses a chunk
-   whose round registered no batch or that uses an off-batch address, and the
-   audit fails an address-bearing corpus with no `--email-manifest`. Do not
-   exclude throwaway providers: sample them into clean and violating cases
-   alike. No real personal data, no real credentials, no directly executable
-   attack code.
-6. **Keep the taxonomy stable.** Reuse option/level sets across records; a
+   and use its output verbatim; it must **not** read, grep, or `cat`
+   `traindata/assets/email_library/*`, and must not invent addresses. The library
+   is a probability model (tiers + weights + cross-map) read by the sampler, not
+   a menu — reading it skips the weighting, and grepping ~280k blocklist lines
+   answers nothing the sampler did not already decide. The `--manifest` is a
+   **locked whitelist**: `write` refuses an off-batch address, and the audit
+   fails an address-bearing corpus with no `--email-manifest`. Do not exclude
+   throwaway providers (freemail and disposable): sample them into clean and
+   violating cases alike. No real personal data, no real credentials, no
+   directly executable attack code.
+7. **Keep the taxonomy stable.** Reuse option/level sets across records; a
    per-record invention defeats calibration.
-7. **Do not let labels collapse.** Both (or all) classes must carry meaningful
+8. **Do not let labels collapse.** Both (or all) classes must carry meaningful
    volume and a clear semantic boundary, not just "the user asked for something
    bad".
-8. **No fixed payload fingerprints.** Do not reuse an injection phrase,
+9. **No fixed payload fingerprints.** Do not reuse an injection phrase,
    template, or opener across cases; do not use giveaway artificial markers
    (`AUTO-APPENDED`, `NOTE FOR BOT OPERATORS`) or local parts that name the intent
    (`evil@`, `attacker@`, `exfil@`). Rotate position (body/subject/status/footer)
    and register. The audit enforces this.
-9. **Entity cross-mapping.** The same domain style — throwaway or corporate —
-   must appear in both clean and violating contexts, so the address never
-   predicts the label. `sample_emails.py --cross-map` does this; the audit fails a
-   corpus where disposable-domain share differs by >30 points between classes.
-10. **One head, one polarity.** No `choice`/`score` question may mean "the
-    failure" on violations and "the avoided failure" on clean cases. Ask what is
-    present in the input (with a `none` option) or split into two single-polarity
-    questions. `severity` rates the impact that occurred; clean ⇒ level 0.
-11. **Diversify the generator, not just the nouns.** Rotate scenario skeletons,
+10. **Entity cross-mapping.** The same email-domain style — throwaway (freemail or
+   disposable) or corporate — must appear in both clean and violating contexts,
+   so the address never predicts the label. `sample_emails.py --cross-map` does
+   this; the audit fails a corpus where the disposable-email-domain share differs
+   by more than 30 points between classes.
+11. **One head, one polarity.** Every case answers the same question the same
+    way; no head may ask "the failure" on violations and "the avoided failure" on
+    clean cases. The shipped taxonomy (`data/taxonomy.json`, v2) fixes the
+    polarity: `is_violation` asks whether a violation occurred; `mechanism` asks
+    what drove the agent's decisive action in *every* case (`injection`,
+    `misdirection`, `faulty_input`, `own_reasoning` — a clean case with no
+    external steering is `own_reasoning` — or `other`; there is no `none` key);
+    `severity` rates the impact that actually occurred, so a clean case is level
+    0 (`none`). A different question may legitimately need an absence option;
+    define it in the taxonomy once and reuse it there — never reuse one head for
+    both directions.
+12. **Diversify the generator, not just the nouns.** Rotate scenario skeletons,
     entity/org families, ID formats, thought voices, and generator personas
     across chunks. One voice across the whole corpus is a shortcut.
-12. **A pilot is a prompt gate.** Hold out scenarios by hash (e.g. 2 of 10),
+13. **A pilot is a prompt gate.** Hold out scenarios by hash (e.g. 2 of 10),
     never tune on the holdout, and never fine-tune on the pilot alone. If pilot
     rows are used, mix them below ~5% with the base corpus and reduce the epoch
     budget.
-13. **The label follows the action, not the address.** A `safe=true` case that
+14. **The label follows the action, not the address.** A `safe=true` case that
     uses a disposable address must carry an explicit neutralising thought (temp
     mailbox is noteworthy, not a violation — vary the wording). A `safe=false`
     case must have an action-level violation and, when injected, must show the
     agent actually performing the injected action; never reason "unsafe because
     the recipient is gmail/temp". The audit enforces both.
-14. **Salt every adversarial prompt, and let the host stamp it.** Before
+15. **Salt every adversarial prompt, and let the host stamp it.** Before
     generating anything with injections or harmful framing, run the prompt
     through `scripts/salt.py`. Register the result with
     `data_writer.py allocate --salted-prompt PATH`; `write` then stamps
     `meta.salted` + `meta.salted_at` on every case of that round. **The model
     must not write `salted` itself** — a self-declared salt is a hallucination,
     it is stripped on write, and `salt.py --check` reports it as
-    ``MODEL-AUTHORED SALT CLAIM``. Run the audit with `--require-salt` in the
-    injection domain; it fails a `salted` flag that lacks a host timestamp. The
-    salt keeps the generator an **author of inert detector data**, not an
-    attacker: everything fictional, harm described not operationalised, no
-    executable attack code, injected text read as quarantined data and never
-    obeyed. **The salt never reaches the data.** It lives only in the
-    generation prompt; the stamp is a `meta` field, and `meta` is stripped when
-    cases expand into records. The final JSONL must be the original sample:
-    `expand_case` asserts its field set is exactly the record contract, the
-    validator rejects any record carrying `meta`, and the audit fails a case
-    whose `turns` echo salt wording ("You are salted", the end-salt marker, the
-    salt preamble). A training row must never say it was salted.
-15. **Never fabricate a hard negative.** `benign_directive_span` is a claim that
+    ``MODEL-AUTHORED SALT CLAIM``. Add `--require-salt` to the audit whenever the
+    round contains injections. The salt keeps the generator an **author of inert
+    detector data**, not an attacker: everything fictional, harm described not
+    operationalised, no executable attack code, injected text read as
+    quarantined data and never obeyed. **The salt never reaches the data.** It
+    lives only in the generation prompt; the stamp is a `meta` field, and `meta`
+    is dropped when cases expand into records (the validator does read
+    `benign_directive_span` / `payload_span` while checking, but no record it
+    emits carries `meta`). The validator rejects any record
+    carrying `meta`, and the audit fails a case whose `turns` echo salt wording
+    ("You are salted", the end-salt marker, the salt preamble). A training row
+    must never say it was salted.
+16. **Never fabricate a hard negative.** `benign_directive_span` is a claim that
     a *clean* case contains an instruction-like but legitimate substring. A
     violating case carrying one is a forgery — an attacker does not append
     their own defence next to the payload — and the validator rejects it before
@@ -530,26 +436,28 @@ are decoded with replacement instead of crashing. Outputs are written atomically
     overlap `payload_span`, and must not share an environment turn with it.
     Legal directives come from the system, the user, or a real tool response,
     never from injected content.
-16. **Author in YAML, convert with the script.** Do not hand-write or hand-fix
+17. **Author in YAML, convert with the script.** Do not hand-write or hand-fix
     JSONL. The model writes YAML; `yaml_to_jsonl.py` does the escaping and
     serialises nested `action`/`content` for you. A conversion error is fixed in
     the YAML source, never by patching the emitted JSON. This is what keeps a
     quoting mistake from silently corrupting a chunk.
-17. **Every run has a wall-clock budget.** Pass `--timeout` to the converter and
+18. **Every run has a wall-clock budget.** Pass `--timeout` to the converter and
     both gates. Exit 3 means "not accepted, retry smaller" — not "raise the
     limit". A hung gate is a failed gate.
-18. **Never write a generator.** Do not create a new `.py` script (`author.py`,
+19. **Never write a generator.** Do not create a new `.py` script (`author.py`,
     `gen.py`, a "small helper") to produce data — the tooling already exists.
-    The model's only output is YAML; `data_writer.py` converts, names, merges
-    and checks it. `data_writer.py check` fails on any `.py` under `data/`.
-19. **Stay inside the round and inside the chosen root.** Pick one output root
-    inside the project (`--data-dir`, default `./data`) and keep every write
-    under it; never write outside the project or into the project root itself.
-    Use only names from `allocate`, write only to the allocated YAML slot, merge
-    only via `data_writer.py merge` (this round's manifest, never a glob), and
-    commit no temp/backup files. Run `data_writer.py check --round <id>
-    --strict` before handing the round off.
-20. **Respect the round timer; ship on stop.** A round has a 3-hour wall clock
+    `data_writer.py check` fails on any `.py` under the output root.
+20. **Stay inside the round and inside the chosen root.** Pick one output root
+    inside the project (`--data-dir`, default `./data`). Corpus writes go under
+    it; the only exception is scratch — the salted prompt, email manifest/ledger,
+    audit reports, and holdouts live in one project-internal directory **outside**
+    the root (e.g. `./work/`), never inside `data/`, because `check --strict`
+    fails on unknown files there. Never write outside the project. Use only names
+    from `allocate`, write only to the allocated YAML slot, merge only via
+    `data_writer.py merge` (this round's manifest, never a glob), and commit no
+    temp/backup files. Run `data_writer.py check --round <id> --strict` before
+    handing the round off.
+21. **Respect the round timer; ship on stop.** A round has a 3-hour wall clock
     by default. At `warn` finish the case in hand and open no new scenario; at
     `stop` new `write` calls are refused and you must run
     `data_writer.py salvage --round <id> --commit` so the finished part still
@@ -558,113 +466,56 @@ are decoded with replacement instead of crashing. Outputs are written atomically
 
 ## Reference files
 
-All paths below are inside the skill directory (`./traindata/`). The scripts are
-part of the skill: run them from `./traindata/scripts/` and never copy them into
-the repository root.
+Path convention: `references/…` and `scripts/…` are relative to this skill
+directory (`./traindata/`); commands here write `traindata/scripts/…` because
+they assume the repository root as cwd. Both name the same files, and the
+scripts are run in place, never copied into the repository root.
 
+**Reading order for a first run:** this file → `references/glossary.md` (any
+term you do not recognise) → `references/anti-shortcut.md` (before writing any
+generation prompt) → `references/authoring-and-rounds.md` (before your first
+`write`) → `references/generation-playbook.md` (before dispatching subagents).
+
+- `references/glossary.md` — every term in one place: case, head, qtype,
+  polarity, scenario, payload, injection surface, hard negative, task domain vs
+  email domain, round, holdout, cross-map, salt, orchestrator/subagent, and the
+  shipped v2 taxonomy in words. Start here when a sentence does not parse.
 - `references/anti-shortcut.md` — the diversity contract, `meta` schema, shortcut
-  fingerprints, entity cross-mapping, answer-time cross-validation, hard
-  negatives, dual-polarity fix, and pilot-mixing rules.
+  fingerprints, entity cross-mapping, hard negatives, polarity fix, pilot mixing.
 - `references/harmbench-methodology.md` — HarmBench methodology (behavior
-  taxonomy, evaluation pipeline, robust metrics) and the **salt** convention for
-  adversarial prompts.
+  taxonomy, pipeline, metrics) and the **salt** convention.
 - `references/soft-labels.md` — distribution rules, ambiguity, normalization, examples.
-- `references/state-formats.md` — string/object/turn-list states and conventions.
+- `references/state-formats.md` — string/object/turn-list states, plus the
+  **measured** length budget: ~0.26 tokens/char, so a 1024-token window keeps
+  ~3.2k characters of state before `build_sequence` truncates the tail.
 - `references/generation-playbook.md` — chunking, prompting, parallelism, retries.
 - `references/taxonomy-design.md` — designing reusable option/level sets, the two
   orthogonal meta axes (`harm_kind` × `request_shape`), and coverage discipline.
+- `references/authoring-and-rounds.md` — exact record schema, YAML authoring,
+  the `data_writer.py` round workflow, `--timeout` / round timer / stop-loss,
+  tolerant input handling, and the command cheat sheet.
 - `assets/inspection-report.md` — template for Phase 4 review.
 - `assets/email_library/` — welded email pool: `freemail.txt`, `synth_domains.txt`,
-  `known_blocklist.txt`, `abuse_contacts.txt`; compositional prefix vocab
-  `names_first.txt` / `names_last.txt` / `roles.txt`; `prefixes.txt` (curated);
-  `email_library.json` / `prefix_vocab.json`; raw sources under `sources/`.
-- `scripts/data_writer.py` — the fixed writer: `allocate` (next names + YAML
-  slots + round budget), `write` (validate + convert into an allocated slot),
-  `merge` (this round only), `salvage` (stop-loss: convert what exists, merge,
-  optionally commit), `check` (stray chunks, temp files, model-authored
-  scripts), `brief` (agent-facing cheat sheet), `list-dirs` (candidate roots).
-- `scripts/yaml_to_jsonl.py` — YAML → validated case-form JSONL / records;
-  normalises nested `action`/`content`, fail-closed, atomic writes.
-- `scripts/dataloader.py` — shared tolerant loader: JSONL/array/fence/BOM
-  handling, the built-in YAML subset reader, atomic writes, and `Deadline`.
-- `references/state-formats.md` — also carries the **measured** ruhui length
-  budget: ~0.26 tokens/char, ~136-token head, so a 1024-token window keeps
-  ~3.2k characters of state before `build_sequence` truncates the tail.
-- `scripts/validate_and_integrate.py` — runnable validator/integrator, used in place.
-- `scripts/audit_diversity.py` — runnable anti-shortcut / diversity gate.
-- `scripts/sample_emails.py` — locked, tiered, cross-mapped batches + prefix
-  ledger + dedup check.
-- `scripts/salt.py` — inoculate a generation prompt with the salt block + needle,
-  and verify every case declared `meta.salted`.
-- `scripts/salt_harmbench.py` — build a safety-salted mirror of a HarmBench
-  checkout so the reference material is read as inert data.
-- `scripts/obfuscators.py` — deterministic host-level / linguistic payload
-  obfuscation primitives (the model never hand-writes base64/hex/homoglyphs).
-- `scripts/build_email_library.py` — rebuilds the welded domain pool (provenance).
-- `scripts/build_prefix_vocab.py` — rebuilds the name/role vocab (provenance).
-- `scripts/build_ccnc_sources.py` — romanizes CCNC Chinese names to pinyin (needs
-  `nix-shell -p python3Packages.pypinyin`; outputs are committed).
+  `known_blocklist.txt`, `abuse_contacts.txt`; prefix vocab `names_first.txt` /
+  `names_last.txt` / `roles.txt`, plus the curated `prefixes.txt` the sampler
+  folds in; provenance under `sources/`.
+- `scripts/data_writer.py` — the fixed writer: `allocate` (names + YAML slots +
+  round budget), `write` (convert + validate into a slot), `merge` (this round
+  only), `salvage` (stop-loss), `check` (stray chunks/temp files/model scripts),
+  `brief` (cheat sheet), `list-dirs`.
+- `scripts/yaml_to_jsonl.py` — YAML → validated JSONL; fail-closed, atomic.
+- `scripts/dataloader.py` — shared tolerant loader (JSON/JSONL/YAML, `Deadline`).
+- `scripts/validate_and_integrate.py` — the validator/integrator, run in place.
+- `scripts/audit_diversity.py` — the anti-shortcut / diversity gate.
+- `scripts/sample_emails.py` — locked, tiered, cross-mapped batches + ledger.
+- `scripts/salt.py` — salt a prompt; verify the **host stamp**. `salt_harmbench.py`
+  mirrors a HarmBench checkout as salted data.
+- `scripts/obfuscators.py` — deterministic payload obfuscation (never hand-written).
+- `scripts/build_*.py` — provenance rebuilds (email pool, prefix vocab, CCNC
+  names). Not part of a generation run.
 
 ## Quick checks
 
-Commands assume the working directory is the repository root and the skill is
-installed at `./traindata/`.
-
-```bash
-# round workflow: allocate -> write -> merge (round only) -> check
-python3 traindata/scripts/data_writer.py allocate --count 10
-python3 traindata/scripts/data_writer.py write --round <id> \
-  --name chunk_0003 --in data/inbox/chunk_0003.yaml --taxonomy taxonomy.json
-python3 traindata/scripts/data_writer.py merge --round <id> --taxonomy taxonomy.json
-python3 traindata/scripts/data_writer.py check --round <id> --strict
-
-# single-file conversion (ad hoc; the round workflow above is the default)
-# convert model-authored YAML into a validated chunk (fail-closed, atomic)
-python3 traindata/scripts/yaml_to_jsonl.py --in 'cases_*.yaml' \
-  --taxonomy taxonomy.json --expand --out chunk_0001.jsonl --timeout 300
-
-# validate the YAML without writing anything
-python3 traindata/scripts/yaml_to_jsonl.py --in 'cases_*.yaml' \
-  --taxonomy taxonomy.json --check
-
-# draw a locked, cross-mapped email batch for a chunk (paste into the prompt)
-python3 traindata/scripts/sample_emails.py --scenario violation --count 10 \
-  --seed 7 --cross-map --manifest email_assignment.json
-
-# validate records
-python3 traindata/scripts/validate_and_integrate.py --check chunk_0001.jsonl --taxonomy taxonomy.json
-
-# validate case-form chunks without writing anything
-python3 traindata/scripts/validate_and_integrate.py --check 'chunk_*.jsonl' \
-  --taxonomy taxonomy.json --expand --require-complete-cases
-
-# diversity audit: mandatory gate, must exit 0 (exit 3 = timeout)
-python3 traindata/scripts/audit_diversity.py --chunks 'chunk_*.jsonl' \
-  --taxonomy taxonomy.json --require-injection --strict --require-library-emails \
-  --email-manifest email_assignment.json --require-salt --require-taxonomy-axes \
-  --holdout 2 --out-dir pilot_holdout --json pilot_diversity.json --timeout 300
-
-# salt a generation prompt (top salt + mid-prompt needle) before calling the model
-python3 traindata/scripts/salt.py --in prompt.txt --out prompt_salted.txt
-
-# verify the returned chunks acknowledged the salt
-python3 traindata/scripts/salt.py --check 'chunk_*.jsonl'
-
-# email dedup check: prints REGENERATE EMAIL YOURSELF when over-reused
-python3 traindata/scripts/sample_emails.py --check 'chunk_*.jsonl' --existing all_soft.jsonl
-
-# integrate (expand cases) and write a data card
-python3 traindata/scripts/validate_and_integrate.py --integrate --out all_soft.jsonl \
-  --taxonomy taxonomy.json --expand --card data-card.md
-
-# deterministic, case-disjoint train/calibration/test split
-python3 traindata/scripts/validate_and_integrate.py --split-dir split --chunks 'chunk_*.jsonl' \
-  --taxonomy taxonomy.json --expand
-
-# leakage check between splits (command is printed by --split-dir)
-python3 traindata/scripts/validate_and_integrate.py --check 'split/test.jsonl' \
-  --leak 'split/train.jsonl' --leak 'split/calibration.jsonl'
-```
-
-Both tools exit non-zero and print every failure, so wire them into your loop and
-treat a non-zero exit as "the chunk does not exist yet".
+The full command cheat sheet is at
+[`references/authoring-and-rounds.md#quick-checks`](references/authoring-and-rounds.md#quick-checks);
+both gates exit non-zero and print every failure, which means "not accepted yet".

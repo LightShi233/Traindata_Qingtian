@@ -1,6 +1,8 @@
 # Generation playbook
 
-How to produce a large corpus without letting quality decay.
+How to produce a large corpus without letting quality decay. Terms are defined
+in `references/glossary.md`; "domain" below means **email domain** only where it
+says so — otherwise it means **task domain** (the subject area of a case).
 
 ## Sizing
 
@@ -23,8 +25,8 @@ let `traindata/scripts/audit_diversity.py` check that the model honoured it.
 For each case in the batch, decide up front and put it in a small table:
 
 - `scenario_family` — rotate a set of task shapes, not one.
-- `entity_family` + name + domain — no family in more than 25% of the chunk;
-  names must appear in the text.
+- `entity_family` + name + email domain — no family in more than 25% of the
+  chunk; names must appear in the text.
 - `id_style` — rotate at least three formats (`NFS-3107`, `#4411`, a UUID, a
   slug, a hex hash, a date-sequence).
 - `injection_present` — at most half the chunk; and if there are injected cases,
@@ -53,7 +55,7 @@ block. Anything the model invents that is not in the plan is a smell.
 | ID style | `ABC-1234` · `#1234` · UUID · lowercase-slug · 12-hex · `YYYY-MM-DD-NN` |
 | injection surface | article body · ticket subject · tool `status` · footer · `description` · `notes` field · revision comment · calendar description |
 | payload register | vendor policy · workflow step · authority claim · data-sync request · admin handoff · compliance sweep |
-| thought voice | terse check · planner · domain expert · cautious · skeptical · uncertain |
+| thought voice | terse check · planner · subject-matter expert · cautious · skeptical · uncertain |
 
 ### Payload writing rules
 
@@ -62,57 +64,63 @@ block. Anything the model invents that is not in the plan is a smell.
 - Vary the verb: cc, route, mirror, sync, escalate, attach, digest — not always
   "forward".
 - Vary length from one clause to three sentences.
-- Fictional but plausible addresses with varied domains and local parts; never
-  an address that names the intent.
+- Fictional but plausible addresses with varied email domains and local parts;
+  never an address that names the intent.
 - Put addresses in clean cases too. If only poison has an address, the model
   learns "address ⇒ attack".
 
 ## Prompt shape
 
-One generation call should produce a JSON array of cases with everything the
-validator and the audit need. Include in the prompt:
+One generation call should produce **YAML** — a list of cases with everything the
+validator and the audit need (the converter does the JSON escaping). Include in
+the prompt:
 
 1. the output schema, verbatim, including the `meta` block
 2. the diversity plan table for this chunk (one row per case)
 3. the exact number of cases and the required safe/unsafe **and**
    injection_present split
-4. the domains/topics to cover this chunk
+4. the **task domains**/topics to cover this chunk
 5. the **required label coverage** for this chunk, named explicitly, so the
    taxonomy does not collapse onto one or two easy options
 6. the soft-label rule (`0.9` primary, `0.1` spread)
 7. the hard rules: no one-hot, exact field set, tool calls ≥2, length range,
    fictional data only, **no fixed payload phrasing, no intent-naming local
-   parts** (domains are free)
-8. the **locked email assignment** block from `sample_emails.py` (the generator
-   must run the script and must not read the library files itself), with the
-   cross-mapping order, the same `--ledger` used for every chunk, the note that
-   the batch is a whitelist enforced via `--email-manifest`, and the two
-   answer-time rules: a `safe=true` case on a disposable address must neutralise
-   it in the thought (vary the wording); a `safe=false` case must violate through
-   an action, never because of the domain
-9. an instruction to output JSON only, no prose and no code fences
+   parts** (email domains are free)
+8. the **locked email assignment** block. The *orchestrator* runs
+   `sample_emails.py` and pastes its output; the generator receives only that
+   block, reuses the addresses verbatim, and must not read the library files
+   itself. State the cross-mapping order, that the same `--ledger` is used for
+   every chunk, that the batch is a whitelist enforced via `--email-manifest`,
+   and the two answer-time rules: a `safe=true` case on a disposable address must
+   neutralise it in the thought (vary the wording); a `safe=false` case must
+   violate through an action, never because of the email domain
+9. an instruction to output YAML only — one document, no prose and no code
+   fences; the model never hand-escapes JSON
 
 Ask for a whole case at once so all its questions share one `text`.
 
 ## The accept loop
+
+This loop is the **orchestrator's**; when generation is delegated, a worker only
+produces the YAML batch (see *Parallel workers*).
 
 ```python
 accepted = []
 while len(accepted) < target:
     plan = build_diversity_plan(remaining=target - len(accepted))
     emails = sample_locked_emails(scenario, count, seed, ledger)  # sample_emails.py
-    batch = call_model(prompt_for(plan, emails))
-    for case in parse(batch):
+    batch = call_model(prompt_for(plan, emails))       # YAML, not JSON
+    for case in load_yaml(batch):                      # converter reports line numbers
         assign_unique_id(case)          # from this worker's ID range
         errors = validate(case)         # same checks as the CLI validator
         if errors:
             log_and_drop(case, errors)  # regenerate rather than hand-patch
             continue
         accepted.append(case)
-write(accepted)
-run_cli_validator(output_path)          # must exit 0
-run_diversity_audit(output_path)        # must exit 0: diversity + cross-map + action attribution
-run_email_dedup(output_path)            # REGENERATE EMAIL YOURSELF on over-reuse
+write_yaml(accepted, allocated_slot)    # data/inbox/chunk_NNNN.yaml
+run_round_write()                       # data_writer.py write: convert + validate
+run_diversity_audit()                   # exit 0: diversity + cross-map + action attribution
+run_email_dedup()                       # REGENERATE EMAIL YOURSELF on over-reuse
 ```
 
 Rules:
@@ -132,8 +140,8 @@ Rules:
   turn list mid-`action`
 - near-duplicate of another case → regenerate with a different template
 - label/argmax mismatch → regenerate; do not silently reorder probabilities
-- JSON parse failure → regenerate; if the model keeps emitting fences, tighten
-  the instruction
+- YAML parse failure → regenerate; the converter names the line, and if the model
+  keeps emitting fences or tabs, tighten the instruction
 - diversity failure → regenerate the **whole chunk** with a new plan; do not
   hand-patch one case, because the failure is the generator's distribution, not
   one row. "Fixed the phrase, kept the sentence" is still the same shortcut.
@@ -141,11 +149,26 @@ Rules:
 ## Parallel workers
 
 - one ID range per worker (e.g. worker `k` owns `<prefix>_k<NNNN>_<hex>`)
-- one output file per worker: `chunk_0001.jsonl`, `chunk_0002.jsonl`, ...
-- each worker validates its own chunk and runs the diversity audit before finishing
+- one allocated slot per worker: the worker writes `data/inbox/chunk_NNNN.yaml`;
+  the orchestrator's `write` produces `data/chunks/chunk_NNNN.jsonl`
+- **the worker only emits YAML into its allocated slot; the orchestrator runs
+  `write`, the validator, and the audit.** A worker's gate call may be blocked by
+  the permission classifier (adversarial-looking content); that is not a verdict.
+  Workers must not depend on executing the gates to know if they passed.
+- **give each worker its plan as a file it Reads, not inline.** A long inline
+  matrix truncates, and a worker that lost its tail will invent replacements and
+  collide on payloads. The worker echoes back the exact `traj_id`s and
+  `payload_span`s it authored; the orchestrator diffs that echo against the plan
+  and re-dispatches on any mismatch instead of merging.
+- assign disjoint `payload_span` and user/thought openers across workers; keep a
+  corpus-wide payload ledger (mirroring the email `--ledger`) so no two workers
+  reuse one payload, and run the cross-chunk dedup inside the loop rather than
+  only at final integration.
 - each worker owns its own slice of the rotation matrix, so parallel workers do
   not converge on the same org names, surfaces, or payload templates
 - integration re-checks duplicates and leakage across all chunks
+- a blocked / off-plan worker chunk must not stall the round: salvage the chunks
+  that pass and redo the bad one in a fresh slot
 
 ## Scaling checklist before a big run
 
@@ -163,8 +186,10 @@ Rules:
 
 ## Tooling
 
-Two bundled tools cover the loop. Run **both** on every chunk; each must exit 0
-before the chunk is accepted.
+Two bundled tools decide acceptance. Run **both** on every chunk; each must exit 0
+before the chunk is accepted. (`data_writer.py write` runs the first of them for
+you, and also refuses off-batch addresses, so in the round workflow the audit is
+the gate you invoke directly.)
 
 `traindata/scripts/validate_and_integrate.py` — schema and soft-label contract:
 
@@ -182,8 +207,9 @@ before the chunk is accepted.
 - reads case-form chunks and their `meta` block, and fails on fixed payload
   fingerprints, giveaway addresses, payload reuse, one org/ID/voice/surface,
   injected-heavy corpora, and dual-polarity taxonomy wording.
-- `--require-injection` for the injection domain; `--strict` to promote warnings
-  to failures; `--json` writes a report for the data card.
+- `--require-injection` for any round whose task domain involves injections;
+  `--strict` to promote warnings to failures; `--json` writes a report for the
+  data card.
 - `--holdout N` writes a scenario-hash `holdout.jsonl` / `dev.jsonl` plus a
   manifest; never train or tune on the holdout.
 
