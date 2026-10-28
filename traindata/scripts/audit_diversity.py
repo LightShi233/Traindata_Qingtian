@@ -992,6 +992,17 @@ def check_email_manifest(parsed, path, audit):
     ``10minutemail.com`` and skip the weighted, cross-mapped batch.
     """
     if not path:
+        # Silence here is how hand-picked domains get in: without a batch there
+        # is nothing to compare against, so "no manifest" must not pass quietly
+        # when the corpus actually contains addresses.
+        used = set()
+        for where, c, m in parsed:
+            used.update(emails(json.dumps(c["turns"], ensure_ascii=False)))
+        if used:
+            audit.fail("locked-batch",
+                       f"发现 {len(used)} 个地址但没有 --email-manifest；"
+                       "无法确认它们来自 sample_emails.py 的锁定批次。"
+                       "用 --email-manifest 指定本轮批次")
         return
     try:
         with open(path, encoding="utf-8") as f:
