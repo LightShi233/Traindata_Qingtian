@@ -2,32 +2,75 @@ name: TrainData Generation
 
 on:
   workflow_dispatch:
+    inputs:
+      prompt_extra:
+        description: '额外追加到 prompt 末尾的要求（可留空）'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
   pull-requests: write
   issues: write
 
+concurrency:
+  group: traindata-gen-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   traindata-gen:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
-      - name: Configure Git committer
+      - name: Configure Git identity and branch
         run: |
+          set -euo pipefail
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="traindata/qwen-${GITHUB_RUN_ID}"
+          git switch -c "$BRANCH"
+          echo "TRAINDATA_BRANCH=$BRANCH" >> "$GITHUB_ENV"
+          git --version
+          python3 --version
 
-      - name: Run OpenCode
-        uses: anomalyco/opencode/github@latest
+      # Qwen Code 的 run 步骤展开为 `qwen --yolo --prompt "$PROMPT" --output-format json`：
+      # 所有工具调用自动批准（含 shell / write / edit），两个 gate 脚本才能真正跑起来。
+      # 模型仍然走 Agnes：agnes 提供 OpenAI 兼容 endpoint，正好是 openai_base_url /
+      # openai_model 这两个输入的形状。默认值与 opencode.jsonc 里的 provider 配置保持一致。
+      # 不要在这里设 tools.core —— 它是 allowlist，会把 python3 挡掉，导致
+      # data_writer.py / validate_and_integrate.py / audit_diversity.py 全部无法执行。
+      - name: Run Qwen Code (Agnes backend)
+        uses: QwenLM/qwen-code-action@v1
         env:
-          AGNES_API_KEY: ${{ secrets.AGNES_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          model: agnes/agnes-3.0-flash
-          use_github_token: true
+          openai_api_key: ${{ secrets.AGNES_API_KEY }}
+          openai_base_url: ${{ vars.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1' }}
+          openai_model: ${{ vars.AGNES_MODEL || 'agnes-3.0-flash' }}
+          qwen_cli_version: ${{ vars.QWEN_CLI_VERSION }}
+          qwen_debug: ${{ vars.DEBUG }}
+          upload_artifacts: 'true'
+          workflow_name: 'traindata-gen'
+          settings: |-
+            {
+              "model": {
+                "maxSessionTurns": 200,
+                "maxWallTimeSeconds": 10800,
+                "maxToolCalls": 1500
+              },
+              "telemetry": {
+                "enabled": true,
+                "target": "local",
+                "outfile": ".qwen/telemetry.log"
+              }
+            }
           prompt: |
             安装并使用 ./traindata skill 为Ruhui编写训练数据。
 
@@ -89,7 +132,47 @@ jobs:
                  把已完成且合法的部分转换、合并并提交。半成品提交算成功，
                  跑满 3 小时却什么都没交是失败。
 
-            8. 完成后提交，开一个 PR 标题前缀为 [traindata_add]
+            8. 完成后提交，开一个 PR 标题前缀为 [traindata_add]。
+               分支已经由 workflow 建好并 checkout（见环境变量 TRAINDATA_BRANCH），
+               直接在这个分支上提交，不要自己再建分支，也不要 push 到 main：
+                 git add -A data/ && git commit -m "data: <本轮摘要>"
+                 git push -u origin "$TRAINDATA_BRANCH"
+                 gh pr create --base main --head "$TRAINDATA_BRANCH" \
+                   --title "[traindata_add] <一句话说明>" --body-file <你写的 body 文件>
+               PR body 里必须贴出各 gate 的退出码，以及本轮的场景数与 chunk 数。
+               如果本轮没有任何合法产出，不要开 PR，直接以失败结束并说明原因。
+
             9. 绝对严禁一次产出超过10个样本，但使用子代理，并且有相应验证时本规则例外
             10. 特别强调多样性原则：用脚本检查，多样性不足时强制更改，或用子代理更改
 
+            ${{ inputs.prompt_extra }}
+
+      # 兜底：模型没按第 8 条开 PR 时，把它在分支上的提交补成一个 PR，
+      # 避免"跑了 3 小时、数据在分支上、却看不到 PR"。
+      - name: Ensure pull request exists
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          BRANCH="${TRAINDATA_BRANCH:-}"
+          if [ -z "$BRANCH" ]; then
+            echo "没有分支信息，跳过"; exit 0
+          fi
+          if ! git rev-parse --verify --quiet "origin/$BRANCH" >/dev/null; then
+            git push -u origin "$BRANCH" || { echo "分支没有可推送内容，跳过"; exit 0; }
+          fi
+          AHEAD=$(git rev-list --count "origin/main..origin/$BRANCH" 2>/dev/null || echo 0)
+          if [ "$AHEAD" -eq 0 ]; then
+            echo "分支与 main 无差异，没有数据产出"; exit 0
+          fi
+          OPEN=$(gh pr list --head "$BRANCH" --state open --json number --jq 'length' 2>/dev/null || echo 0)
+          case "$OPEN" in
+            ''|*[!0-9]*) OPEN=0 ;;   # gh 报错或输出异常时按"没有 PR"处理
+          esac
+          if [ "$OPEN" -gt 0 ]; then
+            echo "PR 已存在（$OPEN 个），跳过"; exit 0
+          fi
+          gh pr create --base main --head "$BRANCH" \
+            --title "[traindata_add] 自动补充：${BRANCH}" \
+            --body "模型未自行开 PR，此处兜底创建。请先在 Actions 日志里确认两个 gate 的退出码为 0 再合并。"
