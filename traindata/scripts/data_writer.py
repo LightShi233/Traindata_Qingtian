@@ -741,6 +741,50 @@ def _scan_files(data_dir):
     return found
 
 
+BRIEF = """\
+=== traindata 速查（agent 照此执行，无需阅读脚本源码）===
+
+流程（每轮固定，不要自造步骤）：
+  1. allocate --count N   -> 打印 N 个 data/inbox/chunk_NNNN.yaml 槽位
+  2. 把纯 YAML 写到那些槽位（不要写 jsonl、不要写别的路径）
+  3. write --round <id> --name chunk_NNNN --in <那个 yaml>
+  4. merge --round <id>
+  5. check --round <id> --strict
+  超时由脚本判定：warn 收尾，stop 用 salvage --commit 交付已完成部分。
+  脚本退出码是唯一权威：0 通过，非 0 未通过。不要改检查来让它变绿。
+
+YAML case 的最小形状（每个 case 一个映射）：
+  traj_id / source_dataset / safe(bool)
+  turns:  列表，首回合 role=user；agent 有 action(映射含 name+arguments)、可选 thought；
+          environment 有 content。至少 2 次工具调用。
+  必须包含 taxonomy 的每个问题标签（noul/choice/score）。
+  meta:
+    scenario_family / entity_family / id_style / thought_style   必填，且要轮换
+    injection_present(bool) / external_contact(bool)             必填
+    harm_kind / request_shape                                    --require-taxonomy-axes 时必填
+    注入时还要 injection_surface / payload_style / payload_span（文本里的原文子串）
+    near_miss 还要 benign_directive_span（仅 clean case，且必须真的出现在 turns 里）
+    不要在 meta 里写 salted —— 由宿主脚本盖
+
+最常被脚本拒绝的原因（按出现频率）：
+  - text 太长：超过 ruhui 1024-token 窗口（约 3.2k 字符）会被尾部截断，违规动作通常在末尾
+  - 多样性不足：scenario_family / entity_family / id_style / thought_style /
+    injection_surface 任一超过 40%，或 safe=false 超过 50%，或全部没有 resisted 注入样本
+  - 地址不在锁定批次：必须用 sample_emails.py 的输出，不要自己编
+  - injection_surface 与 payload 实际所在位置不符（payload 必须在 environment 输出里）
+  - 违规样本写了 benign_directive_span（伪造困难负例）
+  - 手写/手改了 jsonl，或新增了 .py 脚本
+
+需要完整规则时看：traindata/SKILL.md（契约）、traindata/references/anti-shortcut.md
+（meta 字段表与多样性预算）。读文档即可，不要读 scripts/ 的实现。
+""" 
+
+
+def cmd_brief(args):
+    print(BRIEF)
+    return 0
+
+
 def cmd_list_dirs(args):
     """Show which project directories look like output roots."""
     if not REPO_ROOT:
@@ -954,9 +998,11 @@ def main():
 
     sub.add_parser("list-dirs", help="列出项目内可作为输出根目录的候选").set_defaults(
         func=cmd_list_dirs)
+    sub.add_parser("brief", help="打印 agent 速查：流程、字段、常见拒绝原因").set_defaults(
+        func=cmd_brief)
 
     args = parser.parse_args()
-    if args.command == "list-dirs":
+    if args.command in ("list-dirs", "brief"):
         return args.func(args)
     if not REPO_ROOT:
         raise SystemExit(
