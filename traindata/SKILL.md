@@ -428,6 +428,14 @@ are decoded with replacement instead of crashing. Outputs are written atomically
 
 ## Hard rules
 
+0. **The scripts are the authority; agents obey them.** Exit code `0` is the
+   only pass, non-zero is "this chunk does not exist yet". No agent — main or
+   subagent — may edit, comment out, or relax a check to make it green, and no
+   agent's own judgement ("I already fixed it") substitutes for a script's
+   verdict: fix the data and re-run. A subagent's "done" without the script's
+   exit code is not evidence; the main agent re-runs the gate itself. When a
+   script rejects something, repair according to its message — never hand-edit
+   the output files.
 1. **Soft, never one-hot.** Primary `0.9`, remainder `0.1` spread evenly, always
    normalized. Ambiguity is expressed by lowering the primary below `0.9`, not by
    writing a hard 1.0.
