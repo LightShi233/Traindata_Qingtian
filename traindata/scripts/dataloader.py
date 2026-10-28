@@ -32,6 +32,16 @@ class YamlError(ValueError):
     """A YAML document could not be parsed by the built-in subset reader."""
 
 
+# Every gate is the authority on whether a chunk may exist. Prompts drift, a
+# model can rationalise, a subagent can report success it never achieved — the
+# script's exit code cannot. Print this wherever a decision is made so the
+# calling agent knows the verdict is not negotiable.
+AUTHORITY_NOTICE = (
+    "AUTHORITY: 本脚本的输出是唯一裁判。退出码 0 才算通过，非 0 即未通过。\n"
+    "           agent 与 subagent 都必须服从脚本结论：不得改写、绕过、放宽检查，\n"
+    "           不得用自述或自证代替脚本判定；被拒绝时按提示修复后重跑脚本。")
+
+
 class Deadline:
     """Wall-clock budget for a run. ``seconds <= 0`` disables the check."""
 
