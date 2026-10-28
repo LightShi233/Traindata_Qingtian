@@ -52,7 +52,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from dataloader import Deadline, atomic_write_text, read_text  # noqa: E402
+from dataloader import (  # noqa: E402
+    AUTHORITY_NOTICE,
+    Deadline,
+    atomic_write_text,
+    read_text,
+)
 import validate_and_integrate as vi  # noqa: E402
 import yaml_to_jsonl as y2j  # noqa: E402
 
@@ -203,19 +208,37 @@ def require_under(path, data_dir, what):
     return target
 
 
-def require_in_project(path, what="输出目录"):
-    """The root may be renamed, but it must live inside the project checkout."""
+def resolve_project_root(path, what="输出目录"):
+    """Return the chosen root, relocating it into the project when it escaped.
+
+    A run that points outside the project is not refused outright: the corpus
+    belongs to the project, so a stray path is almost always a mistake worth
+    repairing rather than a policy violation. The basename is kept and the root
+    is moved to ``<project>/<basename>``, with a notice saying what changed.
+    """
     if not REPO_ROOT:
         raise SystemExit(
-            "当前不是项目仓库（找不到 .git）。这个 skill 需要把数据放在项目内；"
-            "请在项目根目录下运行，或把 skill 复制进项目后使用")
-    target = os.path.abspath(path)
+            "找不到项目仓库（没有 .git 祖先目录）。这个 skill 要求输出目录在项目内；"
+            "请把 skill 放进项目后在项目根目录下运行\n" + AUTHORITY_NOTICE)
     root = os.path.abspath(REPO_ROOT)
-    if os.path.commonpath([target, root]) != root:
-        raise SystemExit(f"{what} 必须在项目 {_display(root)} 内，拒绝: {path}")
+    target = os.path.abspath(path)
     if target == root:
-        raise SystemExit(f"{what} 不能是项目根本身，请选一个子目录，例如 {_display(root)}/data")
-    return target
+        relocated = os.path.join(root, "data")
+        print(f"[relocate] {what} 不能是项目根本身；改用 {_display(relocated)}", file=sys.stderr)
+        print(AUTHORITY_NOTICE, file=sys.stderr)
+        return relocated
+    if os.path.commonpath([target, root]) == root:
+        return target
+    relocated = os.path.join(root, os.path.basename(target) or "data")
+    print(f"[relocate] {what} {_display(target)} 不在项目内；"
+          f"已改用 {_display(relocated)}。数据必须留在项目内。\n"
+          f"           后续命令请统一使用 --data-dir {_display(relocated)}，"
+          f"不要再用原来的路径。", file=sys.stderr)
+    if os.path.isdir(target):
+        print(f"           原目录仍在磁盘上（未删除）；如确实要使用，请把它移进项目后重新指定。",
+              file=sys.stderr)
+    print(AUTHORITY_NOTICE, file=sys.stderr)
+    return relocated
 
 
 def list_project_data_roots():
@@ -481,6 +504,7 @@ def cmd_write(args):
         for err in errors[:40]:
             print(" -", err)
         print("修好 YAML 后重跑 write；不要手改 JSONL。")
+        print(AUTHORITY_NOTICE)
         return 1
 
     # The salt is a property of the run, not of the model's self-description.
@@ -673,6 +697,7 @@ def cmd_merge(args):
             print(f"合并前校验失败 ({len(errors)} errors)")
             for err in errors[:40]:
                 print(" -", err)
+            print(AUTHORITY_NOTICE)
             return 1
         rows = []
         for index, case in enumerate(state["cases"]):
@@ -860,6 +885,8 @@ def cmd_check(args):
             print("  清理多余/临时文件；删除模型自造的脚本；不要把它们提交。")
         else:
             print(f"PASS ({len(warns)} warnings)")
+        if fails or args.strict:
+            print(AUTHORITY_NOTICE)
     return 1 if fails else 0
 
 
@@ -938,7 +965,7 @@ def main():
     if not args.data_dir:
         raise SystemExit("没有可用的输出目录。请用 --data-dir 指定项目内的一个目录，"
                          "例如 --data-dir ./data（用 list-dirs 查看已有目录）")
-    args.data_dir = require_in_project(args.data_dir, "输出根目录")
+    args.data_dir = resolve_project_root(args.data_dir, "输出根目录")
     if not os.path.isdir(args.data_dir):
         # allocate bootstraps a fresh root; every other command needs one.
         if args.command == "allocate":
