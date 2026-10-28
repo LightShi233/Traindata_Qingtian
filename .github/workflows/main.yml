@@ -42,9 +42,30 @@ jobs:
       # Qwen Code 的 run 步骤展开为 `qwen --yolo --prompt "$PROMPT" --output-format json`：
       # 所有工具调用自动批准（含 shell / write / edit），两个 gate 脚本才能真正跑起来。
       # 模型仍然走 Agnes：agnes 提供 OpenAI 兼容 endpoint，正好是 openai_base_url /
-      # openai_model 这两个输入的形状。默认值与 opencode.jsonc 里的 provider 配置保持一致。
+      # openai_model 这两个输入的形状。action 会把 openai_api_key 注入成环境变量
+      # OPENAI_API_KEY，所以下面 modelProviders 里的 envKey 写的就是它。
+      # 上下文 512k / 输出 65536 写了两处，是故意的：
+      #  - modelProviders[].generationConfig —— 选中该 provider 条目时生效；
+      #  - model.generationConfig —— 只在「没选中 provider 条目」的 Runtime Model
+      #    路径下生效。
+      # action 是用 OPENAI_MODEL 环境变量传模型 id 的，那属于 Runtime Model 路径，
+      # 是否命中 provider 条目取决于 id/protocol/baseUrl 三者匹配。provider 层是
+      # "impermeable"（完全替换下层），所以两处同时写不冲突：命中就用前者，没命中
+      # 就落到后者。只写一处的话，另一条路径会静默用内置默认值猜上下文大小。
+      # （opencode.jsonc 里那行 300k 是旧的，实际额度是 512k；那个文件已不参与 CI。）
       # 不要在这里设 tools.core —— 它是 allowlist，会把 python3 挡掉，导致
       # data_writer.py / validate_and_integrate.py / audit_diversity.py 全部无法执行。
+      # 关于"看不到实时日志"：这不是配置错误，是这个 action 的固有限制。
+      # 它的 run 步骤硬编码 `qwen --yolo --prompt "$PROMPT" --output-format json`，
+      # 且把 stdout/stderr 全重定向进 ${RUNNER_TEMP} 下的临时文件：
+      #   qwen ... 2> "${TEMP_STDERR}" 1> "${TEMP_STDOUT}"
+      # 只有在 qwen 退出之后，若 qwen_debug 为真才 cat 这些文件。它的 12 个 input
+      # 里没有任何流式/实时开关，也没有 tee。所以长跑时必须靠 artifacts 看日志：
+      # upload_artifacts 会保留 stdout.log / stderr.log / telemetry.log。
+      # 真正想实时就得放弃这个 action、自己 `npm i -g @qwen-code/qwen-code` 并改用
+      # --output-format stream-json —— 那等于自己维护一套安装/调用逻辑，稳定性更差，
+      # 所以这里不做。qwen_debug 默认打开，跑完至少能拿到完整输出。
+      # （另外 qwen 的持久重试心跳只写 stderr，也就是同样被重定向，不会实时出现。）
       - name: Run Qwen Code (Agnes backend)
         uses: QwenLM/qwen-code-action@v1
         env:
@@ -55,12 +76,34 @@ jobs:
           openai_base_url: ${{ vars.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1' }}
           openai_model: ${{ vars.AGNES_MODEL || 'agnes-3.0-flash' }}
           qwen_cli_version: ${{ vars.QWEN_CLI_VERSION }}
-          qwen_debug: ${{ vars.DEBUG }}
+          qwen_debug: 'true'
           upload_artifacts: 'true'
           workflow_name: 'traindata-gen'
           settings: |-
             {
+              "modelProviders": {
+                "openai": [
+                  {
+                    "id": "agnes-3.0-flash",
+                    "name": "Agnes 3 Flash",
+                    "envKey": "OPENAI_API_KEY",
+                    "baseUrl": "https://apihub.agnes-ai.com/v1",
+                    "generationConfig": {
+                      "contextWindowSize": 512000,
+                      "samplingParams": {
+                        "max_tokens": 65536
+                      }
+                    }
+                  }
+                ]
+              },
               "model": {
+                "generationConfig": {
+                  "contextWindowSize": 512000,
+                  "samplingParams": {
+                    "max_tokens": 65536
+                  }
+                },
                 "maxSessionTurns": 200,
                 "maxWallTimeSeconds": 10800,
                 "maxToolCalls": 1500
@@ -146,6 +189,20 @@ jobs:
             10. 特别强调多样性原则：用脚本检查，多样性不足时强制更改，或用子代理更改
 
             ${{ inputs.prompt_extra }}
+
+      # 失败时把 qwen 的日志尾巴直接打到本页，省一次下载 artifact 的动作。
+      # 这仍然是"结束后"的输出，不是实时的，别误读。
+      - name: Show Qwen Code log tail on failure
+        if: failure()
+        run: |
+          set -uo pipefail
+          for f in qwen-artifacts/stderr.log qwen-artifacts/stdout.log qwen-artifacts/telemetry.log; do
+            if [ -s "$f" ]; then
+              echo "::: tail -n 200 of $f :::"
+              tail -n 200 "$f"
+              echo "::: end $f :::"
+            fi
+          done
 
       # 兜底：模型没按第 8 条开 PR 时，把它在分支上的提交补成一个 PR，
       # 避免"跑了 3 小时、数据在分支上、却看不到 PR"。
