@@ -79,9 +79,10 @@ def _find_repo_root(start):
 
 
 REPO_ROOT = _find_repo_root(HERE)
-# With a project checkout, data/ sits at its root as the docs promise. A
-# standalone install (no .git ancestor) has no project data dir: --data-dir is
-# then mandatory, instead of silently dropping a corpus into the caller's cwd.
+# The output root is a *choice*: --data-dir may name any directory, but it must
+# sit inside the project, and the layout under it is fixed. That keeps corpora
+# discoverable ("where did this chunk come from") while letting a run pick a
+# name other than data/.
 DEFAULT_DATA = os.path.join(REPO_ROOT, "data") if REPO_ROOT else None
 
 CHUNK_RE = re.compile(r"^chunk_(\d{4,})\.(jsonl|yaml|yml)$")
@@ -194,12 +195,44 @@ def _abs(data_dir, rel):
 
 
 def require_under(path, data_dir, what):
-    """Reject any path that escapes ``./data``."""
+    """Reject any path that escapes the chosen output root."""
     target = os.path.abspath(path)
     root = os.path.abspath(data_dir)
     if os.path.commonpath([target, root]) != root:
         raise SystemExit(f"{what} 必须在 {_display(root)} 下，拒绝: {path}")
     return target
+
+
+def require_in_project(path, what="输出目录"):
+    """The root may be renamed, but it must live inside the project checkout."""
+    if not REPO_ROOT:
+        raise SystemExit(
+            "当前不是项目仓库（找不到 .git）。这个 skill 需要把数据放在项目内；"
+            "请在项目根目录下运行，或把 skill 复制进项目后使用")
+    target = os.path.abspath(path)
+    root = os.path.abspath(REPO_ROOT)
+    if os.path.commonpath([target, root]) != root:
+        raise SystemExit(f"{what} 必须在项目 {_display(root)} 内，拒绝: {path}")
+    if target == root:
+        raise SystemExit(f"{what} 不能是项目根本身，请选一个子目录，例如 {_display(root)}/data")
+    return target
+
+
+def list_project_data_roots():
+    """Candidate output roots: existing ones plus the default."""
+    roots = []
+    if not REPO_ROOT:
+        return roots
+    for name in sorted(os.listdir(REPO_ROOT)):
+        candidate = os.path.join(REPO_ROOT, name)
+        if not os.path.isdir(candidate) or name.startswith("."):
+            continue
+        if os.path.isdir(os.path.join(candidate, "rounds")) or \
+                os.path.isdir(os.path.join(candidate, "chunks")):
+            roots.append(candidate)
+    if DEFAULT_DATA and os.path.isdir(DEFAULT_DATA) and DEFAULT_DATA not in roots:
+        roots.insert(0, DEFAULT_DATA)
+    return roots
 
 
 @contextlib.contextmanager
@@ -683,6 +716,26 @@ def _scan_files(data_dir):
     return found
 
 
+def cmd_list_dirs(args):
+    """Show which project directories look like output roots."""
+    if not REPO_ROOT:
+        print("当前不是项目仓库（找不到 .git）。这个 skill 要求数据放在项目内。")
+        return 1
+    roots = list_project_data_roots()
+    print(f"项目: {_display(REPO_ROOT)}")
+    if not roots:
+        print("还没有输出目录。用 allocate --data-dir <项目内路径> 创建，"
+              f"例如 {_display(os.path.join(REPO_ROOT, 'data'))}")
+        return 0
+    print("可作为输出根目录的候选（--data-dir）：")
+    for root in roots:
+        marker = "  <- 默认" if DEFAULT_DATA and root == DEFAULT_DATA else ""
+        rounds = len(glob.glob(os.path.join(root, "rounds", "*.json")))
+        chunks = len(glob.glob(os.path.join(root, "chunks", "chunk_*.jsonl")))
+        print(f"  {_display(root)}   rounds={rounds} chunks={chunks}{marker}")
+    return 0
+
+
 def cmd_check(args):
     data_dir = os.path.abspath(args.data_dir)
     findings = []
@@ -699,7 +752,7 @@ def cmd_check(args):
             add("FAIL", "temp", f"临时/备份文件: {rel}")
             continue
         if base.endswith(".py") or base.endswith(".pyc"):
-            add("FAIL", "script", f"data/ 下出现脚本（禁止模型自造生成器）: {rel}")
+            add("FAIL", "script", f"输出根目录内出现脚本（禁止模型自造生成器）: {rel}")
             continue
         parts = rel.split("/")
         if parts[0] in ("chunks", "inbox"):
@@ -725,14 +778,12 @@ def cmd_check(args):
         elif os.path.dirname(rel) == "" and parts[0] in ALLOWED_ROOT_DIRS:
             continue
         else:
-            add("WARN", "layout", f"data/ 下出现未知文件: {rel}")
+            add("WARN", "layout", f"输出根目录下出现未知文件: {rel}")
 
     # A model that ignores the rule tends to drop its generator at the repo
-    # root. Only applied to the repo's own data dir so a temp-dir test run
-    # does not inspect the developer's checkout.
-    if (args.round and DEFAULT_DATA
-            and os.path.abspath(data_dir) == os.path.abspath(DEFAULT_DATA)
-            and REPO_ROOT and os.path.isdir(REPO_ROOT)):
+    # root, outside the output root this check scans. The data root is always
+    # inside the project now, so scanning the project root is always in scope.
+    if args.round and REPO_ROOT and os.path.isdir(REPO_ROOT):
         for name in sorted(os.listdir(REPO_ROOT)):
             path = os.path.join(REPO_ROOT, name)
             if os.path.isfile(path) and name.endswith(".py") and name not in ROOT_PY_ALLOWED:
@@ -817,7 +868,9 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data-dir", default=DEFAULT_DATA,
-                        help="数据根目录（仓库内默认 data/；独立安装时必须显式给出）")
+                        help="输出根目录（默认项目内 data/）。可以改名字，但必须在项目内；"
+                             "其下 inbox/chunks/rounds 布局固定，所有读写都限制在这个根目录内。"
+                             "用 list-dirs 查看已有目录")
     sub = parser.add_subparsers(dest="command", required=True)
 
     allocate = sub.add_parser("allocate", help="分配本轮的 chunk 名字与 YAML 槽位")
@@ -872,16 +925,29 @@ def main():
     check.add_argument("--json", action="store_true")
     check.set_defaults(func=cmd_check)
 
+    sub.add_parser("list-dirs", help="列出项目内可作为输出根目录的候选").set_defaults(
+        func=cmd_list_dirs)
+
     args = parser.parse_args()
+    if args.command == "list-dirs":
+        return args.func(args)
+    if not REPO_ROOT:
+        raise SystemExit(
+            "找不到项目仓库（没有 .git 祖先目录）。这个 skill 要求输出目录在项目内，"
+            "请在项目根目录下运行 data_writer.py；独立安装的副本不能单独生成数据")
     if not args.data_dir:
-        raise SystemExit("找不到项目根（无 .git 祖先）。独立安装时必须指定 --data-dir，"
-                         "例如 --data-dir ./data")
+        raise SystemExit("没有可用的输出目录。请用 --data-dir 指定项目内的一个目录，"
+                         "例如 --data-dir ./data（用 list-dirs 查看已有目录）")
+    args.data_dir = require_in_project(args.data_dir, "输出根目录")
     if not os.path.isdir(args.data_dir):
-        # allocate bootstraps a fresh data dir; every other command needs one.
+        # allocate bootstraps a fresh root; every other command needs one.
         if args.command == "allocate":
-            os.makedirs(args.data_dir, exist_ok=True)
+            try:
+                os.makedirs(args.data_dir, exist_ok=True)
+            except OSError as exc:
+                raise SystemExit(f"无法创建输出目录 {args.data_dir}: {exc}")
         else:
-            raise SystemExit(f"data 目录不存在: {args.data_dir}；先运行 allocate")
+            raise SystemExit(f"输出目录不存在: {args.data_dir}；先运行 allocate")
     return args.func(args)
 
 

@@ -356,7 +356,11 @@ python3 traindata/scripts/data_writer.py check --round r-2026... --strict
 
 What the tool enforces:
 
-- **All paths stay under `./data`.** Anything outside is rejected.
+- **One output root, chosen inside the project.** `--data-dir` defaults to
+  `./data` but may name any directory *inside the project*; it cannot be the
+  project root itself or anything outside it. Everything the round writes
+  (inbox, chunks, rounds) stays under that root, so a corpus is always
+  discoverable. Run `data_writer.py list-dirs` to see existing roots.
 - **Names are allocated, not guessed.** `chunk_<4+ digits>`; `write` requires
   the YAML to be at the exact slot from `allocate` and refuses unallocated
   names.
@@ -513,11 +517,13 @@ are decoded with replacement instead of crashing. Outputs are written atomically
     `gen.py`, a "small helper") to produce data — the tooling already exists.
     The model's only output is YAML; `data_writer.py` converts, names, merges
     and checks it. `data_writer.py check` fails on any `.py` under `data/`.
-19. **Stay inside the round and inside `./data`.** Use only names from
-    `allocate`, write only to the allocated YAML slot, merge only via
-    `data_writer.py merge` (this round's manifest, never a glob), and commit no
-    temp/backup files. Run `data_writer.py check --round <id> --strict` before
-    handing the round off.
+19. **Stay inside the round and inside the chosen root.** Pick one output root
+    inside the project (`--data-dir`, default `./data`) and keep every write
+    under it; never write outside the project or into the project root itself.
+    Use only names from `allocate`, write only to the allocated YAML slot, merge
+    only via `data_writer.py merge` (this round's manifest, never a glob), and
+    commit no temp/backup files. Run `data_writer.py check --round <id>
+    --strict` before handing the round off.
 20. **Respect the round timer; ship on stop.** A round has a 3-hour wall clock
     by default. At `warn` finish the case in hand and open no new scenario; at
     `stop` new `write` calls are refused and you must run
