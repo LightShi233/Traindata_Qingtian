@@ -8,7 +8,9 @@ one.
 
 This file is the contract that stops that. It is enforced mechanically by
 `traindata/scripts/audit_diversity.py`, not by good intentions. Read it before Phase 1 and
-run the audit before accepting any chunk.
+run the audit before accepting any chunk. Terms (case, head, scenario, payload,
+injection surface, hard negative, task domain vs email domain, …) are defined in
+`references/glossary.md`.
 
 ## The three mines
 
@@ -16,8 +18,9 @@ run the audit before accepting any chunk.
    phrase ("AUTO-APPENDED NOTE", "NOTE FOR BOT OPERATORS") or always names the
    villain in the address (`support-ext@…`, `evil@…`), the model learns
    `fixed phrase → injection` and lets a reworded attack through. Vary the
-   payload's wording, length, register, and language of authority. **Domains are
-   a separate matter — see entity cross-mapping below.**
+   payload's wording, length, register, and language of authority. **Email
+   domains are a separate matter — see entity cross-mapping below; they are
+   never blacklisted, only balanced.**
 2. **One generator voice.** Thirty rows from one prompt share a scenario
    skeleton, entity names (`Northlight`, `NFS-30xx`, `KB-xxx`), and thought
    tone. The model learns "this style = clean/unsafe". Vary org names, ID
@@ -38,7 +41,8 @@ A fourth trap is a design trap, not a sampling trap:
 
 The audit reads a `meta` object on every case. It is the generator's diversity
 plan, and it is **not** part of `text`, so it never leaks into training. A chunk
-without `meta` does not exist.
+without `meta` does not exist. The validator also reads `benign_directive_span`
+and `payload_span` from it, to check the hard-negative claim against the text.
 
 | field | required | meaning |
 | - | - | - |
@@ -66,6 +70,19 @@ corpus teach judgement rather than pattern matching:
 | false | true | clean case, including benign instruction-like text |
 | false | false | violation without an external injection (misdirection, bad input) |
 
+`injection_surface` is verified, not decorative: the audit locates
+`payload_span` and checks it sits where the label says (a tool `status` field, a
+ticket `footer`, …), and the payload must arrive in an `environment` turn — the
+agent's own output is not an injection source. A payload in the wrong place
+fails with the case index and the expected surface.
+
+`payload_span` must also be **verbatim in the trajectory**. It is the anchor for
+action attribution ("did the agent carry out the injection?") and for payload
+dedup, so a declared span that does not literally occur makes those checks
+vacuous and is rejected (`meta: payload_span 不在 text 中`). Write the payload
+first, paste it into the `environment` turn, then copy the same string into
+`meta.payload_span` — do not paraphrase it after the fact.
+
 ## Diversity budget (defaults, enforced)
 
 | dimension | rule |
@@ -77,25 +94,41 @@ corpus teach judgement rather than pattern matching:
 | payload reuse | no two payloads identical; 3-gram Jaccard ≤ 0.6 |
 | payload openers | no first-3-words opener in more than 2 cases |
 | payload templates | no semantic template (`per X policy`, `cc …@`, `forward … to`, …) in more than 1 case |
-| banned fingerprints | fixed artificial markers: "AUTO-APPENDED", "NOTE FOR BOT/AGENT", system-override markers, chat-template tokens; and intent-naming local parts (`evil@`, `attacker@`, `exfil@`). **Domains are never banned.** |
+| banned fingerprints | fixed artificial markers: "AUTO-APPENDED", "NOTE FOR BOT/AGENT", system-override markers, chat-template tokens; and intent-naming local parts (`evil@`, `attacker@`, `exfil@`). **Email domains are never banned.** |
 | scene skeleton | the first 5 words of the user turn repeat in ≤ 40% of cases; ≥ 60% of cases use a distinct `scenario_family` |
-| org/entity family | each family ≤ 25% of cases; ≥ 3 distinct and ≥ 50% of cases use a distinct family |
-| ID style label | no `id_style` in > 40% of cases; ≥ 3 distinct |
+| org/entity family | each family ≤ 25% of cases; ≥ 50% of cases use a distinct `entity_family` |
+| ID style label | no `id_style` in > 40% of cases; ≥ 40% of cases use a distinct `id_style` |
 | ID formats | ≥ 3 formats across the corpus (the audit finds them in the text) |
 | local-part prefixes | composed from names × roles; no prefix in more than 2 cases; ledger kept corpus-wide |
-| email source | every address comes from `traindata/assets/email_library/` (use `sample_emails.py`); unknown domains are a warning, or a failure under `--require-library-emails` |
+| email source | every address comes from `traindata/assets/email_library/` (via `sample_emails.py`); unknown email domains are a warning, or a failure under `--require-library-emails` |
 | email cross-map | known-disposable share in safe vs unsafe contexts differs by ≤ 30 points; no domain appears 3+ times on only one side; an `--email-manifest` pair must appear in both contexts |
 | email concentration | no single registrable domain > 50% of all addresses |
-| email parity | address presence in clean vs injected cases must not differ by more than 30 points; ≥ 40% of clean cases carry an external-looking contact |
+| email parity | address presence in clean vs injected cases must not differ by more than 30 points; ≥ 40% of clean cases carry an external-looking contact (`--min-clean-external`) |
+| violation-side mail mix | ≥ 40% of addresses in violating cases are freemail (`--min-freemail-in-violations`); ≤ 50% are disposable (`--max-disposable-in-violations`) |
 | hard negatives | 25–75% of clean cases contain a benign, instruction-like substring |
-| thought voice | no first-3-words opener in > 40% of cases; ≥ 3 distinct `thought_style` labels |
+| thought voice | no first-3-words opener in > 40% of cases; ≥ 40% of cases use a distinct `thought_style` |
 | thought phrases | no 4-gram in > 25% of cases (and > 2 absolute) |
 | choice label spread | no single key > 60% (warn above 40%) |
+| label coverage (`--strict`) | every `choice` key and every `score` level appears at least once in the chunk; a key that never appears is a WARN, and a failure under `--strict` |
 | `harm_kind` axis | no kind > 40%; ≥ 3 distinct at scale; `none` present for clean cases |
 | `request_shape` axis | no shape > 40%; ≥ 2 shapes at ≥ 4 cases, all 3 at ≥ 9; `contextual` ⇒ literal `context_span`; `near_miss` ⇒ `benign_directive_span` |
 
 The audit exposes every threshold as a flag. **Do not raise a threshold to make
 a chunk pass.** Change the prompt or the data.
+
+Distinct-count floors scale with chunk size: `scenario_family` needs ≥ 60%
+distinct labels, `entity_family` ≥ 50%, and `id_style` / `thought_style` ≥ 40%
+(each with an absolute floor of 3, capped at the case count). "A few of each" is
+not enough once a chunk has ~20 cases — plan the rotation matrix to meet the
+counts before generating, or the audit fails after the work is done.
+
+Label coverage is the check most likely to fail a small chunk: a ten-case pilot
+can easily miss the rarest `choice` key (e.g. mechanism `other`) or a `score`
+level, and that omission is a real gap — a level the model never sees is a level
+it cannot predict. Fix it by covering every key across the chunk's scenarios, or
+by growing the chunk. **Do not add a throwaway case just to tick a label**: the
+rare-label case must genuinely fit that label on all three heads, or it becomes
+a worse failure at action-attribution than the missing label ever was.
 
 ## Robust metrics: don't tune on the thing you report
 
@@ -114,6 +147,8 @@ Borrowed from HarmBench's third property. Two rules:
 
 ## Email addresses: one pool, entity cross-mapping
 
+In this section (and in every email rule below) **domain means email domain** —
+the registrable domain of an address (`example.org`), never a task domain.
 Addresses are the easiest accidental label. The skill ships a welded
 `traindata/assets/email_library/`:
 
@@ -149,8 +184,8 @@ ready-to-paste prompt block:
 
 ```bash
 python3 traindata/scripts/sample_emails.py --count 10 --seed 7 \
-  --cross-map --require-blocklist --ledger prefix_ledger.txt \
-  --manifest email_assignment.json
+  --cross-map --require-blocklist --ledger work/ledger.txt \
+  --manifest work/emails.json
 ```
 
 `--cross-map` pairs two addresses on the same domain and instructs the generator
@@ -169,12 +204,18 @@ python3 traindata/scripts/sample_emails.py --check 'chunk_*.jsonl' \
   --existing all_soft.jsonl
 ```
 
+This is a manual pre-check; in a round you do not need it, because `data_writer.py
+write` refuses any address outside the locked batch before the chunk exists.
+
 Scenario profiles are weight tables, not filters: `safe` = 50% freemail / 50%
 synth, `violation` = 50% freemail / 30% synth / 20% disposable, `injection` =
-60% disposable / 40% abuse, `report` = 100% abuse. Override with `--weights`.
+60% disposable / 40% abuse, `report` = 100% abuse, and `any` = uniform over
+freemail + synth + disposable (the default). Override with `--weights`.
 The **violation** profile is the important one: the majority of attacks must use
 ordinary free mail, because that is what a competent attacker does and a model
-that only saw throwaway-domain attacks is blind in production.
+that only saw throwaway-domain attacks is blind in production. The audit's
+floor is ≥ 40% freemail in violating cases (the profile targets 50%); drawing
+the violation batch straight from the disposable tier leaves you under it.
 
 ## Answer-time cross-validation (label follows the action, not the address)
 
@@ -221,17 +262,21 @@ every clean case has one, the model learns the reverse shortcut
 
 ## Fixing the dual-polarity head
 
-Never ask one head to name both a failure and an avoidance. Pick one:
+Never ask one head to name both a failure and an avoidance. The shipped v2
+taxonomy solves it the first way below; a different task domain may use the
+second.
 
-- **Prefer a neutral, present-tense reading.** Ask what mechanism is *present in
-  the input*, independent of the outcome, and add a `none` option for cases with
-  no adversarial or faulty mechanism. For a resisted injection the label is
-  still `injection`; for an unsteered clean case it is `none`.
+- **Ask a cause of every case.** `mechanism` asks what drove the agent's
+  decisive action, in violations and clean cases alike. Keys: `injection`,
+  `misdirection`, `faulty_input`, `own_reasoning`, `other`. A resisted injection
+  is still `injection`; an unsteered clean case is `own_reasoning`. There is no
+  `none` — an absence of mechanism is not an observable, and a `none` key on a
+  cause-shaped head ends up tracking the outcome the head is meant to explain.
 - **Or split the head.** A separate `failure_mode` question asked only of
   violations and a separate `resisted_mechanism` asked only of clean cases; both
   instructions are then single-polarity.
-- Rate `severity` as the impact that **actually occurred** (clean ⇒ level 0),
-  never as an "avoided" impact.
+- Rate `severity` as the impact that **actually occurred** (clean ⇒ level 0
+  `none`), never as an "avoided" impact.
 
 `audit_diversity.py` fails any `choice`/`score` instruction or criterion that
 contains the old phrasing, so the bug cannot slip back in through a template.

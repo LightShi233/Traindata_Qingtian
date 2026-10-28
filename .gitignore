@@ -14,5 +14,10 @@ data/**/*.orig
 data/**/*.rej
 data/rounds/.lock
 
+# scratch: salted prompts, email manifest/ledger, audit reports, holdouts.
+# Kept outside the output root so `check` does not see it, and out of git so
+# `salvage --commit` cannot sweep it in.
+/work/
+
 # agent instructions are local-only, not part of the project
 AGENTS.md

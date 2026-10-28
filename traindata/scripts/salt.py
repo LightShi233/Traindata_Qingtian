@@ -3,19 +3,25 @@
 
 Every prompt that involves adversarial / injection / harmful material must be
 **salted** before it reaches the generating model, and the model must be *told*
-it is salted and echo the acknowledgement in ``meta.salted``. This keeps the
-generator in the role of *data author for a detector* instead of drifting into
-the role of attacker or victim.
+it is salted. This keeps the generator in the role of *data author for a
+detector* instead of drifting into the role of attacker or victim.
+
+The model does **not** write the acknowledgement. Register the salted prompt
+with ``data_writer.py allocate --salted-prompt PATH`` and ``write`` stamps
+``meta.salted`` + ``meta.salted_at`` from it; a ``salted`` field the model wrote
+itself is a hallucinated attestation and is stripped on write.
 
 Two modes:
 
     # wrap a prompt (top salt + mid-prompt needle + "you are salted" notice)
     python3 traindata/scripts/salt.py --in prompt.txt --out salted.txt
 
-    # verify a case-form chunk declared the salt on every case
+    # verify every case in a chunk carries the host's salt stamp
     python3 traindata/scripts/salt.py --check 'chunk_*.jsonl'
 
-On an unsalted chunk the check prints ``UNSALTED CHUNK`` and exits non-zero.
+``--check`` exits non-zero on a chunk whose cases lack the host stamp
+(``UNSALTED CHUNK``), and on one where the model declared the salt itself
+(``MODEL-AUTHORED SALT CLAIM``).
 
 See ``references/harmbench-methodology.md`` for why the salt exists.
 """

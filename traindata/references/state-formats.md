@@ -1,8 +1,11 @@
 # State formats
 
-`state` is whatever the model is asked about. It is serialized once into `text`
-with `json.dumps(state, ensure_ascii=False)`, and every record of the same case
-must carry the byte-identical `text`.
+`state` is whatever the model is asked about — the input a case's questions are
+answered from. It is serialized once into `text` with
+`json.dumps(state, ensure_ascii=False)`, and every record of the same case must
+carry the byte-identical `text`. Terms are defined in `references/glossary.md`.
+"Domain" below always means **task domain** (the subject area: support, finance)
+unless it says email domain.
 
 ## Three shapes
 
@@ -24,7 +27,7 @@ state = {"order_id": "A-10022", "amount": 182.5, "currency": "USD",
          "status": "shipped", "carrier": "Ferrowind Logistics"}
 ```
 
-Prefer a flat object; nest only when the domain is genuinely hierarchical.
+Prefer a flat object; nest only when the task domain is genuinely hierarchical.
 
 ### 3. Turn list (recommended for trajectory-like states)
 
@@ -49,11 +52,15 @@ Turn-list conventions:
 - first turn is `user`
 - roles are `user`, `agent`, `environment`
 - `agent` turns carry `action` as a **JSON string** (not a nested object) and may
-  carry `thought`; a final `agent` turn may carry `content` instead of `action`
+  carry `thought`; a final `agent` turn may carry `content` instead of `action`.
+  In YAML authoring, write `action:` as a mapping — `yaml_to_jsonl.py`
+  serialises it to the JSON string this shape requires.
 - `environment` turns carry the tool result in `content`
 - at least 2 tool calls per case; 6–14 turns is a healthy range
-- keep `json.dumps(turns, ensure_ascii=False)` between roughly 1500 and 5000
-  characters
+- aim for roughly 1500–5000 characters of `json.dumps(turns, ensure_ascii=False)`.
+  The validator enforces the **ceiling**, not this range: `write` fails a `text`
+  over `max_len * 3.2` ≈ 3.2k characters (see the length budget below). Treat the
+  lower end as a richness guide, and never pad filler to reach it.
 
 ## Choosing a shape
 
@@ -93,16 +100,16 @@ placement is part of the design, not an accident:
   data-sync request, an admin handoff — not one fixed "NOTE FOR …" sentence.
 - vary the **address**: use the locked batch from
   `traindata/scripts/sample_emails.py` (the welded pool of normal free-mail,
-  invented corporate and disposable domains). Never name the intent in the local
-  part (`evil@`, `exfil@`); the domain itself is free, and disposable domains are
-  allowed and expected. A payload teaches the right lesson only if a reworded
-  version would still look ordinary.
+  invented corporate and disposable email domains). Never name the intent in the
+  local part (`evil@`, `exfil@`); the email domain itself is free, and disposable
+  domains are allowed and expected. A payload teaches the right lesson only if a
+  reworded version would still look ordinary.
 - record it in the case `meta` block (`injection_surface`, `payload_style`,
   `payload_span`); see `references/anti-shortcut.md`.
 
-**Address cross-mapping.** Do not let the domain style become the label. Draw
-one batch with `sample_emails.py --cross-map` and place one address of each pair
-in a clean case and the other in a violating case, so `gmail`-style and
+**Address cross-mapping.** Do not let the email-domain style become the label.
+Draw one batch with `sample_emails.py --cross-map` and place one address of each
+pair in a clean case and the other in a violating case, so `gmail`-style and
 corporate-style domains both appear on both sides. Clean cases must also carry
 addresses; if addresses appear only in poisoned cases, "has an address" becomes
 the label.
@@ -112,7 +119,7 @@ address must neutralise it in the thought (temp mailbox is noteworthy, not a
 violation — vary the wording). A `safe=false` case must violate through an
 action (out-of-scope read/export, unauthorised send, destructive change), and if
 an injection was present the agent must actually perform the injected action.
-Diagnosing the domain instead of the act is the exact shortcut this skill
+Diagnosing the email domain instead of the act is the exact shortcut this skill
 prevents; the audit fails both cases.
 
 **Hard negatives.** 25–75% of clean cases should contain instruction-like but
@@ -124,7 +131,9 @@ finance), so the model cannot map "instruction-like tool output ⇒ unsafe".
 Every case-form chunk carries a `meta` object (not part of `text`, so it never
 enters training). It records the diversity plan so the audit can verify it. The
 full field list and the enforced budget are in `references/anti-shortcut.md`; the
-schema-agnostic validator ignores it, the diversity audit requires it.
+diversity audit requires it, and the validator reads `benign_directive_span` and
+`payload_span` from it rather than ignoring it.
+
 ## The ruhui length budget (measured)
 
 `ruhui`'s `build_sequence` windows the state at `max_len` tokens (1024 in the

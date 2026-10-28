@@ -28,7 +28,7 @@ corpus as part of the data card.
 | no one-hot / uniform | | |
 | primary is `0.9` (or documented `0.7`) | | |
 | label coverage across keys | | |
-| coverage per domain | | |
+| coverage per task domain | | |
 | no `choice`/`score` head with dual-polarity wording | | |
 
 ### Label distribution
@@ -50,24 +50,25 @@ each dimension by hand:
 | injection surfaces (≥2, not all in body) | | |
 | payload styles / registers | | |
 | payload text reused across cases | | |
-| fixed fingerprints / intent-naming local parts | | domains are never blacklisted |
+| fixed fingerprints / intent-naming local parts | | email domains are never blacklisted |
 | org / entity families | | |
 | ID formats (≥3) | | |
 | scenario skeletons (first words of the user turn) | | |
 | thought voice (openers, phrase reuse) | | |
-| emails all from `email_library` (no invented domains) | | `--require-library-emails` |
+| emails all from `email_library` (no invented email domains) | | `--require-library-emails` |
 | locked batch honoured (no off-batch addresses) | | `--email-manifest` |
 | local-part prefixes not reused (>2 cases) | | compositional + `--ledger` |
 | email cross-map: disposable share safe vs unsafe ≤ 30 pts | | |
-| dangerous attacks not all on disposable domains | | violation profile: ≥50% freemail |
+| dangerous attacks not all on disposable email domains | | profile targets 50% freemail; audit floor ≥40% |
 | email presence parity clean vs injected | | |
 | safe-with-temp-mail neutralised in thought (varied wording) | | |
-| unsafe justified by an action, not the domain | | |
+| unsafe justified by an action, not the email domain | | |
 | email dedup (`REGENERATE EMAIL YOURSELF` clean) | | |
 | hard negatives (benign instruction-like text) share | | |
 | `harm_kind` axis rotated (no kind > 40%, ≥3 kinds) | | two orthogonal axes |
 | `request_shape` axis rotated (standard/contextual/near_miss) | | `contextual` ⇒ literal `context_span`; `near_miss` ⇒ `benign_directive_span` |
-| salt declared on every case (`meta.salted`) | | `--require-salt` |
+| label coverage: every `choice` key and `score` level appears | | `--strict` |
+| salt host-stamped on every case (`meta.salted` + `meta.salted_at`) | | `--require-salt` |
 | scenario-hash holdout written & disjoint | | never tune on it |
 
 ### Payload samples (for the reviewer)

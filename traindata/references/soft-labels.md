@@ -1,7 +1,11 @@
 # Soft labels
 
-Soft labels are the training signal. Hard one-hot targets push the model to
-saturate its softmax and destroy the calibration the model exists to provide.
+Soft labels are the training signal: a probability distribution over a
+question's options instead of a single right answer. Hard one-hot targets push
+the model to saturate its softmax and destroy the calibration the model exists to
+provide. **qtype** is a question's answer type — `noul` (true/false), `choice`
+(one of k keys), `score` (one ordered level); other terms are in
+`references/glossary.md`.
 
 ## Default distribution
 
@@ -14,6 +18,9 @@ saturate its softmax and destroy the calibration the model exists to provide.
 | `score` | `k` levels | primary `0.9`, each other `0.1 / (k - 1)` |
 
 Always renormalize after computing, and assert `abs(sum(p) - 1.0) <= 1e-6`.
+The live option sets are the ones in `data/taxonomy.json`; the keys in the
+examples below are illustrative only — never copy `risk_source`/`sink`/`delay`
+into a real record.
 
 ### Worked examples
 
@@ -32,10 +39,10 @@ Always renormalize after computing, and assert `abs(sum(p) - 1.0) <= 1e-6`.
 Prefer emitting spread values rounded to 6-8 decimals and then renormalizing the
 last key so the sum is exactly 1.0 in float64.
 
-`score` with 3 levels, primary level 1:
+`score` with 4 levels (the shipped `severity` shape), primary level 1:
 
 ```json
-{"probabilities": {"0": 0.05, "1": 0.9, "2": 0.05}, "label": "1"}
+{"probabilities": {"0": 0.0333333333, "1": 0.9, "2": 0.0333333333, "3": 0.0333333333}, "label": "1"}
 ```
 
 ## Deliberately ambiguous cases
@@ -57,7 +64,8 @@ Rules for ambiguity:
 ## Anti-patterns
 
 - **One-hot** (`1.0 / 0.0`). Rejected by the validator.
-- **Uniform** (`0.25 / 0.25 / 0.25 / 0.25`). Carries no signal.
+- **Uniform** (`0.25 / 0.25 / 0.25 / 0.25`). Carries no signal; the validator
+  rejects an exactly uniform distribution.
 - **Unnormalized** mass (e.g. `0.9 / 0.9`). Rejected by the validator.
 - **Label/argmax mismatch.** Rejected by the validator.
 - **Sharpening too far.** Repeated `0.99` primaries turn calibration into a
