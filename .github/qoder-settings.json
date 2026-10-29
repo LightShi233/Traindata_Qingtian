@@ -1,0 +1,34 @@
+{
+  "model": {
+    "name": "dfmodel",
+    "contextWindow": 1000000,
+    "preferences": {
+      "fast": {
+        "contextWindow": 1000000
+      },
+      "auto": {
+        "contextWindow": 1000000
+      },
+      "ultimate": {
+        "reasoning": {
+          "effort": "low"
+        },
+        "contextWindow": 1000000
+      },
+      "qfmodel": {
+        "contextWindow": 1000000
+      },
+      "dfmodel": {
+        "contextWindow": 1000000
+      }
+    }
+  },
+  "general": {
+    "defaultPermissionMode": "bypass_permissions"
+  },
+  "security": {
+    "folderTrust": {
+      "enabled": false
+    }
+  }
+}

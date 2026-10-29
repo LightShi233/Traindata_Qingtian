@@ -9,10 +9,14 @@ on:
         default: ''
         type: string
 
+# id-token: write 是 Qoder Action 的硬要求：它用 OIDC 把
+# (GitHub OIDC token + QODER_PERSONAL_ACCESS_TOKEN) 换成 qoderai App 的
+# installation token，再拿它配 git remote。少了这一项，action 第一步就退出。
 permissions:
   contents: write
   pull-requests: write
   issues: write
+  id-token: write
 
 concurrency:
   group: traindata-gen-${{ github.ref }}
@@ -33,89 +37,55 @@ jobs:
           set -euo pipefail
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          BRANCH="traindata/qwen-${GITHUB_RUN_ID}"
+          BRANCH="traindata/qoder-${GITHUB_RUN_ID}"
           git switch -c "$BRANCH"
           echo "TRAINDATA_BRANCH=$BRANCH" >> "$GITHUB_ENV"
           git --version
           python3 --version
 
-      # Qwen Code 的 run 步骤展开为 `qwen --yolo --prompt "$PROMPT" --output-format json`：
-      # 所有工具调用自动批准（含 shell / write / edit），两个 gate 脚本才能真正跑起来。
-      # 模型仍然走 Agnes：agnes 提供 OpenAI 兼容 endpoint，正好是 openai_base_url /
-      # openai_model 这两个输入的形状。action 会把 openai_api_key 注入成环境变量
-      # OPENAI_API_KEY，所以下面 modelProviders 里的 envKey 写的就是它。
-      # 上下文 512k / 输出 65536 写了两处，是故意的：
-      #  - modelProviders[].generationConfig —— 选中该 provider 条目时生效；
-      #  - model.generationConfig —— 只在「没选中 provider 条目」的 Runtime Model
-      #    路径下生效。
-      # action 是用 OPENAI_MODEL 环境变量传模型 id 的，那属于 Runtime Model 路径，
-      # 是否命中 provider 条目取决于 id/protocol/baseUrl 三者匹配。provider 层是
-      # "impermeable"（完全替换下层），所以两处同时写不冲突：命中就用前者，没命中
-      # 就落到后者。provider 条目的 id/baseUrl 也用同一组 vars 表达式，这样
-      # AGNES_MODEL / AGNES_BASE_URL 覆盖后仍然命中，不会因为写死默认值而静默
-      # 退回内置上下文大小。只写一处的话，另一条路径会猜上下文大小。
-      # （旧的 opencode.jsonc 已删除；实际额度以这里为准：512k / 65536。）
-      # 不要在这里设 tools.core —— 它是 allowlist，会把 python3 挡掉，导致
-      # data_writer.py / validate_and_integrate.py / audit_diversity.py 全部无法执行。
-      # 关于"看不到实时日志"：这不是配置错误，是这个 action 的固有限制。
-      # 它的 run 步骤硬编码 `qwen --yolo --prompt "$PROMPT" --output-format json`，
-      # 且把 stdout/stderr 全重定向进 ${RUNNER_TEMP} 下的临时文件：
-      #   qwen ... 2> "${TEMP_STDERR}" 1> "${TEMP_STDOUT}"
-      # 只有在 qwen 退出之后，若 qwen_debug 为真才 cat 这些文件。它的 12 个 input
-      # 里没有任何流式/实时开关，也没有 tee。所以长跑时必须靠 artifacts 看日志：
-      # upload_artifacts 会保留 stdout.log / stderr.log / telemetry.log。
-      # 真正想实时就得放弃这个 action、自己 `npm i -g @qwen-code/qwen-code` 并改用
-      # --output-format stream-json —— 那等于自己维护一套安装/调用逻辑，稳定性更差，
-      # 所以这里不做。qwen_debug 默认打开，跑完至少能拿到完整输出。
-      # （另外 qwen 的持久重试心跳只写 stderr，也就是同样被重定向，不会实时出现。）
-      - name: Run Qwen Code (Agnes backend)
-        uses: QwenLM/qwen-code-action@v1
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Qoder Action 的 run 步骤展开为：
+      #   qodercli -w $GITHUB_WORKSPACE -p "$PROMPT" <flags 逐行拆成 argv> -f stream-json
+      # 三个要点：
+      #
+      # 1) 认证只走 PAT。action 先把 QODER_PERSONAL_ACCESS_TOKEN 放进环境变量
+      #    （CLI 见到它就自动用 PAT 认证），再用 OIDC 换 qoderai App 的
+      #    installation token 配 git remote。所以这里不需要任何 provider /
+      #    api key 输入，
+      #    settings 里也不写 security.auth —— 本机 ~/.qoder/settings.json 里的
+      #    "selectedType": "qoder-browser" 是浏览器登录，runner 上没有浏览器，
+      #    带过来只会让 CLI 去拉授权页。
+      #
+      # 2) 模型配置沿用本机 settings，落在 .github/qoder-settings.json，用
+      #    --settings 指过去：model.name = dfmodel（实际解析成 DeepSeek-Flash），
+      #    各模型 contextWindow = 1000000，ultimate 的 reasoning.effort = low。
+      #    --settings 是优先级最高的一层，且是深合并（只覆盖写到的字段），
+      #    所以文件里只放要覆盖的部分。为什么不用项目级 .qoder/settings.json：
+      #    那份会被本机 CLI 自动加载，等于把 CI 的模型配置强加给本地开发。
+      #
+      # 3) --dangerously-skip-permissions 等价于旧的 `qwen --yolo`：工具调用
+      #    （shell / write / edit）全部自动批准，两个 gate 脚本才能真正跑起来。
+      #    不要设 tools.core —— 它是 allowlist，会把 python3 挡掉，导致
+      #    data_writer.py / validate_and_integrate.py / audit_diversity.py 全部无法执行。
+      #
+      # 日志：wrapper 把 qodercli 的 stream-json 逐行解析并实时打印
+      # （::group::Assistant / [Tool Call] / [Thinking]），所以这次是真正的实时
+      # 日志，不再有旧 action 那种“跑完才 cat 临时文件”的问题。
+      # output_file 输出是完整 stream-json 记录，落成 artifact 只作留档/复盘。
+      #
+      # qodercli_version 钉在 1.1.80（npm latest，与本机一致）：action 自带的
+      # 默认 0.1.18 太旧，--settings / --dangerously-skip-permissions 在旧版上
+      # 没有保证。升级前先在本地跑一次 `qodercli -p hi -f stream-json` 确认
+      # 事件形状（system/init + assistant/message）没变，否则 wrapper 的实时
+      # 打印会退化成原样输出。
+      - name: Run Qoder CLI (PAT auth, local model settings)
+        id: qoder
+        uses: QoderAI/qoder-action@v0
         with:
-          openai_api_key: ${{ secrets.AGNES_API_KEY }}
-          openai_base_url: ${{ vars.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1' }}
-          openai_model: ${{ vars.AGNES_MODEL || 'agnes-3.0-flash' }}
-          qwen_cli_version: ${{ vars.QWEN_CLI_VERSION }}
-          qwen_debug: 'true'
-          upload_artifacts: 'true'
-          workflow_name: 'traindata-gen'
-          settings: |-
-            {
-              "modelProviders": {
-                "openai": [
-                  {
-                    "id": "${{ vars.AGNES_MODEL || 'agnes-3.0-flash' }}",
-                    "name": "Agnes (OpenAI-compatible)",
-                    "envKey": "OPENAI_API_KEY",
-                    "baseUrl": "${{ vars.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1' }}",
-                    "generationConfig": {
-                      "contextWindowSize": 512000,
-                      "samplingParams": {
-                        "max_tokens": 65536
-                      }
-                    }
-                  }
-                ]
-              },
-              "model": {
-                "generationConfig": {
-                  "contextWindowSize": 512000,
-                  "samplingParams": {
-                    "max_tokens": 65536
-                  }
-                },
-                "maxSessionTurns": 200,
-                "maxWallTimeSeconds": 10800,
-                "maxToolCalls": 1500
-              },
-              "telemetry": {
-                "enabled": true,
-                "target": "local",
-                "outfile": ".qwen/telemetry.log"
-              }
-            }
+          qoder_personal_access_token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          qodercli_version: ${{ vars.QODER_CLI_VERSION || '1.1.80' }}
+          flags: |
+            --dangerously-skip-permissions
+            --settings .github/qoder-settings.json
           prompt: |
             按仓库内的 ./traindata/SKILL.md 契约与流程为 Ruhui 编写训练数据
             （这是仓库内的 skill，不需要安装、复制或修改它）。
@@ -221,19 +191,34 @@ jobs:
 
             ${{ inputs.prompt_extra }}
 
-      # 失败时把 qwen 的日志尾巴直接打到本页，省一次下载 artifact 的动作。
-      # 这仍然是"结束后"的输出，不是实时的，别误读。
-      - name: Show Qwen Code log tail on failure
+      # 完整 stream-json 记录留档。实时日志已经在上面边跑边打，这份只是复盘用的。
+      - name: Upload Qoder CLI transcript
+        if: always() && steps.qoder.outputs.output_file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: qoder-transcript
+          path: ${{ steps.qoder.outputs.output_file }}
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # 失败时把 qodercli 的 stderr 和记录尾巴直接打到本页，省一次下载 artifact 的动作。
+      - name: Show Qoder CLI log tail on failure
         if: failure()
+        env:
+          QODER_ERROR: ${{ steps.qoder.outputs.error }}
+          QODER_OUTPUT_FILE: ${{ steps.qoder.outputs.output_file }}
         run: |
           set -uo pipefail
-          for f in qwen-artifacts/stderr.log qwen-artifacts/stdout.log qwen-artifacts/telemetry.log; do
-            if [ -s "$f" ]; then
-              echo "::: tail -n 200 of $f :::"
-              tail -n 200 "$f"
-              echo "::: end $f :::"
-            fi
-          done
+          if [ -n "${QODER_ERROR:-}" ]; then
+            echo "::: tail -n 100 of qodercli stderr :::"
+            printf '%s\n' "$QODER_ERROR" | tail -n 100
+            echo "::: end stderr :::"
+          fi
+          if [ -n "${QODER_OUTPUT_FILE:-}" ] && [ -s "$QODER_OUTPUT_FILE" ]; then
+            echo "::: tail -n 200 of ${QODER_OUTPUT_FILE} :::"
+            tail -n 200 "$QODER_OUTPUT_FILE"
+            echo "::: end transcript :::"
+          fi
 
       # 模型自述的退出码不算数：开 PR 前 workflow 自己用同一套脚本复核本分支
       # 新增的 chunk。校验失败就不写 work/gates_ok，兜底 PR 步骤会因此跳过。
