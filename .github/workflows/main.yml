@@ -67,16 +67,27 @@ jobs:
       #    不要设 tools.core —— 它是 allowlist，会把 python3 挡掉，导致
       #    data_writer.py / validate_and_integrate.py / audit_diversity.py 全部无法执行。
       #
-      # 日志：wrapper 把 qodercli 的 stream-json 逐行解析并实时打印
-      # （::group::Assistant / [Tool Call] / [Thinking]），所以这次是真正的实时
-      # 日志，不再有旧 action 那种“跑完才 cat 临时文件”的问题。
-      # output_file 输出是完整 stream-json 记录，落成 artifact 只作留档/复盘。
+      # 日志（实测，别照着 action 的 README 想当然）：wrapper 的实时打印条件是
+      # `type == "assistant" && subtype == "message"` 且内容块 `type == "function"`，
+      # 而 1.1.80 发的是 `{"type":"assistant","message":{...}}`（无顶层 subtype），
+      # 内容块是 thinking / tool_use / text。两个条件都不成立，所以跑的过程中
+      # 只会看到 "Arguments for qodercli"、Session ID、结束时的成功/失败行，
+      # 中间过程不会实时出现 —— 这是版本错配（wrapper 按 0.1.18 的形状写的），
+      # 不是配置问题。降回 0.1.18 也解决不了：那一版没有 --settings 和
+      # --context-window，模型配置就带不过去了。
+      # 因此下面的 Summarize 步骤在跑完后自己解一遍 transcript，把工具调用、
+      # 助手消息和最终 result 打进 job 日志；完整记录另外存 artifact。
+      #
+      # 开跑时那句 "2 errors loading agent configs" 也已定位，不是本仓库配置问题：
+      # action 自带的 .qoder/agents/{code-analyzer,test-analyzer}.md 的 frontmatter
+      # 首行写成了 "--- "（多一个空格），1.1.80 严格匹配 "---" 就拒绝，0.1.18 容忍。
+      # 这两个 agent 只给 /review-pr、/assistant 用，本流程不调用，属无害噪音；
+      # 不去 hack action 的复制流程（它每次都会 rsync 覆盖回去）。
       #
       # qodercli_version 钉在 1.1.80（npm latest，与本机一致）：action 自带的
-      # 默认 0.1.18 太旧，--settings / --dangerously-skip-permissions 在旧版上
-      # 没有保证。升级前先在本地跑一次 `qodercli -p hi -f stream-json` 确认
-      # 事件形状（system/init + assistant/message）没变，否则 wrapper 的实时
-      # 打印会退化成原样输出。
+      # 默认 0.1.18 太旧，--settings / --context-window 在那一版上根本不存在
+      # （已用 0.1.18 实测确认）。升级前先在本地跑一次
+      # `qodercli -p hi -f stream-json`，确认上面的日志前提仍然成立。
       - name: Run Qoder CLI (PAT auth, local model settings)
         id: qoder
         uses: QoderAI/qoder-action@v0
@@ -191,7 +202,61 @@ jobs:
 
             ${{ inputs.prompt_extra }}
 
-      # 完整 stream-json 记录留档。实时日志已经在上面边跑边打，这份只是复盘用的。
+      # action 的实时打印在 1.1.80 上是废的（见上方日志说明），所以这里自己解一遍
+      # transcript：工具调用、最后几条助手消息、最终 result。日志里至少能看出
+      # 这 3 小时干了什么、卡在哪一步。
+      - name: Summarize Qoder CLI transcript
+        if: always() && steps.qoder.outputs.output_file != ''
+        env:
+          QODER_OUTPUT_FILE: ${{ steps.qoder.outputs.output_file }}
+        run: |
+          set -uo pipefail
+          python3 - "$QODER_OUTPUT_FILE" <<'PY'
+          import json, sys
+
+          tools, texts, result = [], [], None
+          with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+              for line in fh:
+                  line = line.strip()
+                  if not line.startswith("{"):
+                      continue
+                  try:
+                      ev = json.loads(line)
+                  except json.JSONDecodeError:
+                      continue
+                  if ev.get("type") == "assistant":
+                      for part in (ev.get("message") or {}).get("content") or []:
+                          if part.get("type") == "text" and part.get("text"):
+                              texts.append(part["text"])
+                          elif part.get("type") == "tool_use":
+                              raw = part.get("input")
+                              if not isinstance(raw, str):
+                                  raw = json.dumps(raw, ensure_ascii=False)
+                              tools.append((part.get("name") or "?", raw))
+                  elif ev.get("type") == "result":
+                      result = ev
+
+          print(f"[transcript] {len(texts)} assistant messages / {len(tools)} tool calls")
+          for name, raw in tools[:300]:
+              print(f"[tool] {name}: {' '.join(raw.split())[:160]}")
+          if len(tools) > 300:
+              print(f"... {len(tools) - 300} more tool calls (see artifact)")
+          for text in texts[-20:]:
+              print("::group::assistant")
+              print(text[:1500])
+              print("::endgroup::")
+          if len(texts) > 20:
+              print(f"... {len(texts) - 20} earlier assistant messages omitted")
+          if result is not None:
+              print(f"[result] subtype={result.get('subtype')} is_error={result.get('is_error')} turns={result.get('num_turns')}")
+              final = (result.get("result") or "").strip()
+              if final:
+                  print("::group::final result")
+                  print(final[:2000])
+                  print("::endgroup::")
+          PY
+
+      # 完整 stream-json 记录留档，复盘用。
       - name: Upload Qoder CLI transcript
         if: always() && steps.qoder.outputs.output_file != ''
         uses: actions/upload-artifact@v4
