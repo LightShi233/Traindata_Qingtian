@@ -207,6 +207,22 @@ What the tool enforces:
 - Round manifests live in `data/rounds/<round>.json`; sources in
   `data/inbox/`; accepted chunks in `data/chunks/`.
 
+### Which file is training data
+
+Only `rounds/<round>/soft_*.jsonl` (identical to `merged_soft.jsonl`) is
+training data. The layers are easy to confuse because all three are JSONL:
+
+| path | shape | feed to ruhui? |
+| - | - | - |
+| `inbox/chunk_NNNN.yaml` | source the model authored | no |
+| `chunks/chunk_NNNN.jsonl` | **case form**: `traj_id`, `safe`, `turns`, `meta`, label fields | **no** |
+| `rounds/<round>/soft_*.jsonl` | **record form** (the 9-field contract) | **yes, this one** |
+
+A case-form line has no `id`, `text`, `qtype`, `criteria`, `instruction` or
+`soft_label`; handing it to `prepare_train_data.py` yields zero items instead of
+an error, so the mistake is quiet. If a file's first line carries `turns` and
+`traj_id`, it is an intermediate, not a dataset.
+
 ### When a gate fails
 
 There is exactly one recovery path, and it is mechanical. Never weaken a check,

@@ -78,6 +78,34 @@ Turn-list conventions:
   `qtype`/`criteria`/`instruction`/`soft_label`
 - two cases with the same `source_hash` are duplicates and must be dropped
 
+## The `text` field is a JSON *string*, and ruhui wants it that way
+
+`text` holds the serialized state, so a turn-list state appears in the JSONL as
+a quoted string carrying `\"` and `\n` escapes. That is not corruption:
+
+```json
+{"text": "[{\"role\": \"user\", \"content\": \"Review the draft.\\n\"}, ...]"}
+```
+
+`ruhui`'s `prepare_train_data.py` reads it with `o.get("text", "").strip()` and
+passes the **string** straight to `build_sequence`, which tokenizes whatever
+`serialize_state` returns — and for a `str` that is the string itself. Measured
+against `ruhui-finetuned/tokenizer`, the escaped form tokenizes to roughly 3×
+the tokens of de-escaped prose (19 vs 6 on a one-turn sample), and that is the
+distribution the shipped model was trained on. So **do not `json.loads(text)`
+before tokenizing for ruhui**: parsing changes the input the head expects.
+
+Parsing `text` is correct only for consumers that render a chat template from
+turns (a Qwen-style `<|im_start|>` formatter, say). If you write such a
+consumer, parse first:
+
+```python
+turns = json.loads(record["text"])   # only for turn/chat-template consumers
+```
+
+The rule: `text` stays a JSON string in the file; whether to parse it depends
+on the downstream model, not on the file format.
+
 ## Content hygiene
 
 - fictional names, `example` TLD or otherwise invented organizations, 555-prefixed
