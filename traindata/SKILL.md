@@ -179,25 +179,39 @@ placeholder. Full explanation and terms: `references/authoring-and-rounds.md`
 Never generate the whole corpus in one shot. Loop per chunk:
 
 ```
-draw a locked email batch + write the diversity plan (e.g. 10 cases)
+draw a locked email batch + write the diversity plan (start with 8 cases)
   -> generate the chunk with that exact email batch in the prompt
-    -> validate that chunk (schema + soft labels)
-      -> audit that chunk (diversity + anti-shortcut + action attribution)
-        -> check email dedup; if any check fails, regenerate (never weaken a check)
-          -> only accepted chunks are kept
+    -> gate the YAML itself (validate + audit; no --require-salt yet)
+      -> write the chunk (the host stamps salt)
+        -> gate again with --require-salt (schema + audit + action attribution)
+          -> on any failure: discard, fix the YAML, repeat (never weaken a check)
+            -> merge + check; only accepted chunks are kept
 ```
+
+Gate the YAML before `write` whenever possible: both gates read `.yaml` directly,
+so a bad chunk is never emitted and no discard is needed. The preflight audit
+omits `--require-salt` because the stamp only exists after `write`.
+
+A chunk has a **minimum viable size**. Two injected cases can never satisfy the
+40% `injection_surface` / `payload_style` cap (each value is 50%); seven cases
+can never satisfy the 40% `request_shape` / `harm_kind` cap. Start from 8 cases
+with 3 injected cases, 3 surfaces, 3 payload styles, and cover every `choice`
+key and `score` level. See the worked matrix in
+[`references/generation-playbook.md`](references/generation-playbook.md#minimum-pilot-matrix).
 
 Tips that make this work in practice:
 
 - **Author each chunk in YAML, into an allocated slot.** Run
-  `data_writer.py allocate --count N` first; the model writes one `.yaml` file
-  per chunk (a list of cases, or `---`-separated documents) at the printed
-  `data/inbox/chunk_NNNN.yaml` path, then `data_writer.py write` converts and
-  validates it. In YAML the model does not hand-escape quotes: `action:` is a
-  mapping, long `content:` is a `|` block.
+  `data_writer.py allocate --count 1` for a single chunk (`--count` is the
+  number of *chunk slots*, not cases; every case of one chunk goes into one
+  `.yaml`). The model writes one `.yaml` file per chunk (a list of cases, or
+  `---`-separated documents) at the printed `data/inbox/chunk_NNNN.yaml` path,
+  then `data_writer.py write` converts and validates it. In YAML the model does
+  not hand-escape quotes: `action:` is a mapping, long `content:` is a `|`
+  block.
 
   ```bash
-  python3 traindata/scripts/data_writer.py allocate --count 10
+  python3 traindata/scripts/data_writer.py allocate --count 1
   python3 traindata/scripts/data_writer.py write --round <id> \
     --name chunk_0001 --in data/inbox/chunk_0001.yaml --taxonomy data/taxonomy.json
   ```
@@ -226,7 +240,12 @@ Tips that make this work in practice:
 - Generate a whole `case` at once (state + all its questions + `meta`) so the
   shared `text`/`source_hash`/`source_index` stay consistent.
 - Reject and regenerate noisy records rather than patching them by hand. A
-  diversity failure means regenerate the whole chunk, not one row.
+  diversity failure means regenerate the whole chunk, not one row. If the chunk
+  was already `write`n, run `data_writer.py discard --round <id> --name
+  chunk_NNNN --reason <failure code>` first: it removes only that chunk's JSONL,
+  keeps the YAML, and returns the slot to `pending` so the same name can be
+  rewritten. Never `rm` the JSONL, never hand-edit it, and never allocate a new
+  name to dodge a bad chunk — `merge` would still pick the old one up.
 - **Subagents emit YAML only — never a gate.** The orchestrator (main agent) is
   the sole executor of `write` / `validate_and_integrate.py` / `audit_diversity.py`
   / `salvage`. A subagent is *not* expected to run them, and if its shell call is
@@ -255,8 +274,9 @@ Tips that make this work in practice:
   at the end wasted every chunk written after it.
 - **A blocked or off-plan chunk never blocks the round.** If one chunk is denied
   execution, malformed, or improvised off-spec, do not stall integration on it:
-  `salvage` the chunks that pass and redo the bad one in a freshly allocated slot
-  (never overwrite). A partial round committed is a success.
+  `salvage` the chunks that pass, then redo the bad one — with `discard` and the
+  same slot if it was already written, or in a freshly allocated slot if it was
+  never written. Never overwrite a JSONL. A partial round committed is a success.
 
 See `references/generation-playbook.md` for prompting patterns, chunk sizing,
 parallelization, and the retry loop.
@@ -455,8 +475,10 @@ read it before your first `write`. The hard rules below still apply.
     fails on unknown files there. Never write outside the project. Use only names
     from `allocate`, write only to the allocated YAML slot, merge only via
     `data_writer.py merge` (this round's manifest, never a glob), and commit no
-    temp/backup files. Run `data_writer.py check --round <id> --strict` before
-    handing the round off.
+    temp/backup files. A chunk rejected by a gate is returned to `pending` with
+    `data_writer.py discard` — never overwritten, never hand-deleted, never
+    abandoned under a new name. Run `data_writer.py check --round <id> --strict`
+    before handing the round off.
 21. **Respect the round timer; ship on stop.** A round has a 3-hour wall clock
     by default. At `warn` finish the case in hand and open no new scenario; at
     `stop` new `write` calls are refused and you must run

@@ -20,6 +20,10 @@ manifest, so a round can never sweep in another round's or a hand-written file.
     python3 traindata/scripts/data_writer.py write --round <id> \
       --name chunk_0003 --in data/inbox/chunk_0003.yaml --taxonomy data/taxonomy.json
 
+    # 2b. if the chunk then fails validate/audit, return it to pending and
+    #     rewrite the same slot after fixing the YAML (the YAML is kept):
+    python3 traindata/scripts/data_writer.py discard --round <id> --name chunk_0003
+
     # 3. merge ONLY this round's written chunks, expanding to records
     python3 traindata/scripts/data_writer.py merge --round <id> \
       --taxonomy data/taxonomy.json
@@ -32,8 +36,12 @@ Rules this tool enforces
 - Every output lives under ``./data``. A path outside it is rejected.
 - Chunk names are ``chunk_<4+ digits>`` and are allocated, never guessed;
   ``write`` requires the YAML to sit at the exact allocated path.
-- An existing JSONL is never overwritten; allocate a new name instead.
-- ``merge`` refuses to include anything not written by this round.
+- An existing JSONL is never overwritten. A written chunk that failed a gate is
+  returned to ``pending`` with ``discard`` (which removes only that chunk's
+  JSONL and keeps the YAML) and then rewritten under the same name, never by
+  hand and never by allocating a new name that leaves the bad one mergeable.
+- ``merge`` refuses to include anything not written by this round, and skips
+  discarded chunks automatically.
 - ``check`` fails on unallocated chunk files, temp/backup files, and any
   model-authored ``.py`` under ``data/``.
 
@@ -375,7 +383,10 @@ def cmd_allocate(args):
             if "SALT" not in text.upper():
                 raise SystemExit(f"{_display(salted_prompt)} 里没有 salt 块；"
                                  "请先用 salt.py --in/--out 生成")
-            manifest["salted_prompt"] = _rel(data_dir, salted_prompt)
+            # Store provenance as a repo-relative path: the manifest is
+            # committed with the corpus, so it must not embed the author's
+            # home directory.
+            manifest["salted_prompt"] = _display(salted_prompt)
             manifest["salted_prompt_sha256"] = hashlib.sha256(
                 text.encode()).hexdigest()
             manifest["salted_prompt_registered_at"] = _now()
@@ -393,7 +404,7 @@ def cmd_allocate(args):
                 raise SystemExit(f"{args.email_manifest} 里没有 emails；"
                                  "用 sample_emails.py --cross-map --manifest 生成")
             manifest["email_batch"] = batch
-            manifest["email_manifest_source"] = os.path.abspath(args.email_manifest)
+            manifest["email_manifest_source"] = _display(args.email_manifest)
             manifest["email_batch_registered_at"] = _now()
         used = chunk_numbers(os.path.join(data_dir, "chunks"))
         used |= chunk_numbers(os.path.join(data_dir, "inbox"))
@@ -429,6 +440,9 @@ def cmd_allocate(args):
         print(f"  {allocation['name']}  yaml={_display(_abs(data_dir, allocation['yaml']))}"
               f"  jsonl={_display(_abs(data_dir, allocation['jsonl']))}")
     print("只允许把 YAML 写到上面的 yaml 路径；不要新建脚本或其它文件。")
+    print("注意: --count 是 chunk 槽位数，不是 case 数；一个 chunk 的全部 case "
+          "写进同一个 YAML。只跑一个 pilot chunk 时用 --count 1，"
+          "多分配的槽位保持 pending、不会被 merge。")
     return 0
 
 
@@ -523,7 +537,10 @@ def cmd_write(args):
         raise SystemExit(f"YAML 不存在: {_display(expected_yaml)}")
     if os.path.exists(expected_jsonl):
         raise SystemExit(f"{_display(expected_jsonl)} 已存在；"
-                         "不得覆盖已产出的 chunk。需要重做请 allocate 一个新名字。")
+                         "不得覆盖已产出的 chunk。\n"
+                         f"  若它未通过 validate/audit，先运行: data_writer.py discard "
+                         f"--round {args.round} --name {args.name}\n"
+                         "  然后修好 YAML 再重写同一个名字；只有确实要另开一个 chunk 时才 allocate 新名字。")
 
     taxonomy = args.taxonomy or os.path.join(data_dir, "taxonomy.json")
     if not os.path.exists(taxonomy):
@@ -578,6 +595,85 @@ def cmd_write(args):
         latest["updated_at"] = _now()
         save_round(data_dir, latest)
     print(f"{summary} -> {_display(expected_jsonl)}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# discard
+# --------------------------------------------------------------------------- #
+def cmd_discard(args):
+    """Return a written chunk to pending after a gate rejected it.
+
+    ``write`` never overwrites an existing chunk, which is correct for accepted
+    data but a trap for rejected data: a chunk written before the gates reject
+    it cannot be fixed in place, and allocating a new name would leave the bad
+    one in the round for ``merge`` to pick up. ``discard`` is the sanctioned
+    way out: it removes only that chunk's JSONL, keeps the YAML for repair, and
+    resets the manifest entry to pending so the same slot can be rewritten.
+    """
+    data_dir = os.path.abspath(args.data_dir)
+    if not ROUND_RE.match(args.round):
+        raise SystemExit(f"非法 round id: {args.round!r}")
+    manifest = load_round(data_dir, args.round)
+    if manifest is None:
+        raise SystemExit(f"没有这个 round: {args.round}")
+    allocation = next((a for a in manifest["allocations"] if a["name"] == args.name), None)
+    if allocation is None:
+        raise SystemExit(f"{args.name} 不属于 round {args.round}；"
+                         "discard 只能用于本轮分配过的 chunk")
+
+    jsonl = require_under(_abs(data_dir, allocation["jsonl"]), data_dir, "chunk 输出")
+    yaml_path = require_under(_abs(data_dir, allocation["yaml"]), data_dir, "YAML 槽位")
+
+    with _lock(data_dir):
+        latest = load_round(data_dir, args.round) or manifest
+        current = next((a for a in latest["allocations"] if a["name"] == args.name), None)
+        if current is None:
+            raise SystemExit(f"{args.name} 在 round {args.round} 的清单中消失了；重新 allocate")
+        was = current.get("status", "pending")
+        if was == "pending" and not os.path.exists(jsonl):
+            result = {"name": args.name, "status": "pending",
+                      "discarded": False, "reason": "already pending"}
+            if args.json:
+                print(json.dumps(result, ensure_ascii=False))
+            else:
+                print(f"{args.name} 已经是 pending，且没有 JSONL；无需 discard")
+            return 0
+        existed = os.path.exists(jsonl)
+        if existed:
+            os.remove(jsonl)
+        latest.setdefault("discards", []).append({
+            "name": args.name,
+            "discarded_at": _now(),
+            "previous_status": was,
+            "reason": args.reason or "",
+            "sha256": current.get("sha256"),
+            "cases": current.get("cases"),
+        })
+        current["status"] = "pending"
+        for key in ("written_at", "sha256", "cases"):
+            current.pop(key, None)
+        current["discarded_at"] = _now()
+        if args.reason:
+            current["discard_reason"] = args.reason
+        latest["updated_at"] = _now()
+        save_round(data_dir, latest)
+
+    merged = os.path.join(data_dir, "rounds", args.round, "merged_soft.jsonl")
+    result = {"name": args.name, "status": "pending", "discarded": True,
+              "previous_status": was, "jsonl_removed": existed,
+              "yaml": _display(yaml_path),
+              "merged_output_stale": os.path.exists(merged)}
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(f"discarded {args.name} (was {was}; JSONL "
+          f"{'removed' if existed else 'already absent'})")
+    print(f"  YAML 保留待修: {_display(yaml_path)}")
+    print(f"  修好后重跑: write --round {args.round} --name {args.name} "
+          f"--in {_display(yaml_path)} --taxonomy data/taxonomy.json")
+    if os.path.exists(merged):
+        print(f"  注意: {_display(merged)} 是本轮旧的合并结果，重写后必须重新 merge")
     return 0
 
 
@@ -790,16 +886,38 @@ BRIEF = """\
 === traindata 速查（agent 照此执行，无需阅读脚本源码）===
 
 流程（每轮固定，不要自造步骤）：
-  0. sample_emails.py --scenario <safe|violation> --count N --cross-map \
+  0. sample_emails.py --scenario <safe|violation> --count N --cross-map
        --manifest <path> --ledger <path>     -> 冻结的地址批次（原样使用）
-  1. allocate --count N --email-manifest <path> [--salted-prompt <path>]
-                          -> 打印 N 个 data/inbox/chunk_NNNN.yaml 槽位
-  2. 把纯 YAML 写到那些槽位（不要写 jsonl、不要写别的路径）
-  3. write --round <id> --name chunk_NNNN --in <那个 yaml>
-  4. merge --round <id>
-  5. check --round <id> --strict
+  1. allocate --count 1 --email-manifest <path> [--salted-prompt <path>]
+       --count 是 chunk 槽位数，不是 case 数；一个 pilot chunk 用 --count 1。
+       一个 chunk 的全部 case 写进同一个 YAML；多分配的槽位保持 pending、不会被 merge。
+  2. 写 YAML（一个 chunk 一个文件，不要写 jsonl、不要写别的路径）
+  3. 先过一遍网关（YAML 可直接被读取；预检不要带 --require-salt，salt 章还没盖）：
+       validate_and_integrate.py --check <yaml> --taxonomy data/taxonomy.json
+         --expand --require-complete-cases --timeout 300
+       audit_diversity.py --chunks <yaml> --taxonomy data/taxonomy.json
+         --require-injection --strict --require-taxonomy-axes
+         --email-manifest <path> --timeout 300
+  4. write --round <id> --name chunk_NNNN --in <那个 yaml>   （此时才盖 salt 章）
+  5. 再跑一遍上面的两个网关，这次 audit 加 --require-salt
+  6. merge --round <id>      （只合并 written，discarded/pending 自动跳过）
+  7. check --round <id> --strict
   超时由脚本判定：warn 收尾，stop 用 salvage --commit 交付已完成部分。
   脚本退出码是唯一权威：0 通过，非 0 未通过。不要改检查来让它变绿。
+
+网关失败后的唯一正确动作（不要 rm、不要手改 jsonl、不要放宽阈值）：
+  - write 之前就失败：直接改 YAML，重跑第 3 步
+  - write 之后才失败：discard --round <id> --name <name> --reason <失败码>
+    它只删该 chunk 的 JSONL、保留 YAML 并把槽位退回 pending；改好 YAML 后
+    用同一个 --name 重跑 write，再 merge。（已 merge 的话重写后必须重新 merge）
+  - 退出码 3 = 超时：缩小 chunk 或拆分重试，不要加大 --timeout
+
+小 chunk 的数学下限（先算再写，避免白转）：
+  - 注入 surface / payload_style 各 ≤40%：只有 2 个注入样本时每个必占 50%，无解。
+    至少 3 个注入样本 + 3 种 surface + 3 种 payload_style。
+  - request_shape / harm_kind 各 ≤40%：7 个 case 无解（最多 2/2/3 分布），
+    pilot 至少 8 个 case 才能把所有轴排开。
+  - --strict 还要求每个 choice key 和每个 score level 至少出现一次。起步用 8-case 矩阵。
 
 地址规则（最容易被绕过的一条）：
   地址只能来自第 0 步的批次，并原样写进样本。
@@ -826,6 +944,13 @@ YAML case 的最小形状（每个 case 一个映射）：
   - text 太长：超过 ruhui 1024-token 窗口（约 3.2k 字符）会被尾部截断，违规动作通常在末尾
   - 多样性不足：scenario_family / entity_family / id_style / thought_style /
     injection_surface 任一超过 40%，或 safe=false 超过 50%，或全部没有 resisted 注入样本
+  - entity_family 必须逐 token 字面出现在 turns 里（"Orchard & Vale Accounting"
+    不能简写成 "Orchard & Vale"）
+  - safe=true 用了一次性域名却没有中立化：thought 里必须同时出现
+    (temporary|temp|disposable|throwaway)+(mail|mailbox) 和一个范围词
+    (within scope / not a violation / compliant / business action)。
+    最稳的写法是原样抄这句：
+    "The sender uses a temporary mailbox; noteworthy, but the business action stays within scope."
   - 地址不在锁定批次：必须用 sample_emails.py 的输出，不要自己编
   - injection_surface 与 payload 实际所在位置不符（payload 必须在 environment 输出里）
   - 违规样本写了 benign_directive_span（伪造困难负例）
@@ -1001,7 +1126,9 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
 
     allocate = sub.add_parser("allocate", help="分配本轮的 chunk 名字与 YAML 槽位")
-    allocate.add_argument("--count", type=int, default=1)
+    allocate.add_argument("--count", type=int, default=1,
+                          help="本轮要分配的 chunk 槽位数（不是 case 数）。一个 chunk 的全部 "
+                               "case 写进同一个 YAML；只跑一个 pilot chunk 时用 --count 1")
     allocate.add_argument("--round", default=None, help="沿用已有 round id（追加分配）")
     allocate.add_argument("--worker", default=None, help="subagent 标签，便于追溯")
     allocate.add_argument("--salted-prompt", default=None,
@@ -1028,6 +1155,15 @@ def main():
                        help="ruhui 训练窗口 token 数（默认 1024，取自 rl_agent_config.json）；"
                             "0 关闭 text 长度护栏")
     write.set_defaults(func=cmd_write)
+
+    discard = sub.add_parser(
+        "discard", help="把未过网关的已写 chunk 退回 pending（删除其 JSONL，保留 YAML）")
+    discard.add_argument("--round", required=True)
+    discard.add_argument("--name", required=True)
+    discard.add_argument("--reason", default="",
+                         help="失败原因（写入清单，便于追溯），例如 audit:injection_surface")
+    discard.add_argument("--json", action="store_true")
+    discard.set_defaults(func=cmd_discard)
 
     merge = sub.add_parser("merge", help="只合并本轮已写入的 chunk")
     merge.add_argument("--round", required=True)

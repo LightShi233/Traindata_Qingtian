@@ -16,6 +16,42 @@ says so — otherwise it means **task domain** (the subject area of a case).
 Small chunks matter: a single large request tends to truncate, repeat templates,
 and drift from the schema late in the output.
 
+### Minimum pilot matrix
+
+Do the axis math **before** generating. The 40% caps make some small chunks
+impossible, and a model that keeps retrying one can loop forever:
+
+- `injection_surface` / `payload_style` are counted over injected cases only.
+  With 2 injected cases every value is 50% > 40% — **unsolvable**. Use ≥3
+  injected cases with 3 distinct surfaces and 3 distinct styles.
+- `request_shape` / `harm_kind` are counted over all cases. At 7 cases the cap
+  is `floor(0.4 × 7) = 2` per shape, so three shapes can hold at most 6 cases —
+  **7 cases are unsolvable**; use ≥8 (8 gives a 3 + 3 + 2 split).
+- `--strict` also requires every `choice` key and every `score` level to appear
+  at least once.
+
+A working 8-case pilot (the shape this skill was tested with):
+
+| case | safe | injection (surface / style) | mechanism | severity | harm_kind | request_shape | id_style |
+| - | - | - | - | - | - | - | - |
+| 1 | T | — (hard negative) | own_reasoning | 0 | none | near_miss | ticket_num |
+| 2 | T | footer / workflow_step (resisted) | injection | 0 | data_egress | standard | prefix_seq |
+| 3 | T | — (hard negative) | other | 0 | none | near_miss | slug |
+| 4 | F | description / authority_claim (yielded) | injection | 3 | data_egress | contextual | uuid |
+| 5 | F | — | misdirection | 1 | destructive_change | contextual | hex |
+| 6 | F | — | faulty_input | 2 | misinformation | standard | ticket_num |
+| 7 | T | status / admin_note (resisted) | injection | 0 | data_egress | standard | uuid |
+| 8 | F | — | own_reasoning | 2 | destructive_change | contextual | uuid |
+
+It covers all 5 `mechanism` keys, all 4 `severity` levels, 4 `harm_kind`s and
+all 3 `request_shape`s. Clean cases carry 2 hard negatives (25–75% window) and
+the address batch is 3 cross-mapped pairs (2 freemail + 1 disposable): one
+address of each pair goes into a clean case (1, 2, 3) and its twin into a
+violating case (4, 5, 6), so the violation side stays ≥40% freemail. Case 7
+carries no address, which keeps the clean/injected address gap small. Every
+`scenario_family`, `entity_family`, and user-turn opener is distinct; the
+8 org families are each 12.5% of the chunk.
+
 ## The diversity contract (do this before any chunk)
 
 Read `references/anti-shortcut.md` first. A chunk is designed, not sampled: write
@@ -118,15 +154,24 @@ while len(accepted) < target:
             continue
         accepted.append(case)
 write_yaml(accepted, allocated_slot)    # data/inbox/chunk_NNNN.yaml
-run_round_write()                       # data_writer.py write: convert + validate
-run_diversity_audit()                   # exit 0: diversity + cross-map + action attribution
+preflight_gates(yaml)                   # validate + audit on the YAML (no --require-salt)
+run_round_write()                       # data_writer.py write: convert + validate + salt stamp
+postflight_gates()                      # validate + audit again, this time --require-salt
 run_email_dedup()                       # REGENERATE EMAIL YOURSELF on over-reuse
+# any gate failure after write: data_writer.py discard --round R --name N --reason CODE,
+# fix the YAML, write the same name, then merge again. Never rm or hand-edit the JSONL.
 ```
 
 Rules:
 
 - **Never** weaken the validator or the audit to make a batch pass. Fix the data
   or the prompt.
+- **Gate the YAML before `write`.** Both gates read `.yaml` directly; a chunk
+  that fails preflight never becomes a JSONL in the round. The preflight audit
+  omits `--require-salt` because the host stamp exists only after `write`.
+- **After a written chunk fails a gate, `discard` it.** That is the only
+  supported recovery; reallocating a fresh name leaves the bad chunk in the
+  round and `merge` will still include it.
 - Track a rejection count and its reasons; a rising rate means the prompt drifted.
 - Keep a per-worker ID prefix so parallel workers cannot collide.
 - Write only accepted records to the chunk file; keep rejects in a side log.
@@ -145,6 +190,8 @@ Rules:
 - diversity failure → regenerate the **whole chunk** with a new plan; do not
   hand-patch one case, because the failure is the generator's distribution, not
   one row. "Fixed the phrase, kept the sentence" is still the same shortcut.
+  If the chunk was already written, `discard` it first so `merge` cannot pick
+  it up.
 
 ## Parallel workers
 
@@ -168,7 +215,8 @@ Rules:
   not converge on the same org names, surfaces, or payload templates
 - integration re-checks duplicates and leakage across all chunks
 - a blocked / off-plan worker chunk must not stall the round: salvage the chunks
-  that pass and redo the bad one in a fresh slot
+  that pass; if a written chunk is off-spec, `discard` it and redo the same slot
+  (a fresh slot only if the YAML is a total loss), never leaving it written
 
 ## Scaling checklist before a big run
 

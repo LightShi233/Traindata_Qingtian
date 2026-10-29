@@ -89,8 +89,8 @@ first, paste it into the `environment` turn, then copy the same string into
 | - | - |
 | injected share | `injection_present=true` ≤ 50% of cases |
 | unsafe share | `safe=false` ≤ 50% of cases |
-| injection positions | ≥ 2 for a small chunk, ≥ 3 once there are ≥ 6 injected cases; no surface > 40%; not all in the body |
-| payload styles | ≥ 2 (≥ 3 at scale); no style > 40% |
+| injection positions | ≥ 3 distinct surfaces whenever there are injected cases, and one more per 6 injected cases; no surface > 40%; not all in the body (2 injected cases are impossible: each surface is 50%) |
+| payload styles | ≥ 3 distinct styles whenever there are injected cases, one more per 6 injected cases; no style > 40% |
 | payload reuse | no two payloads identical; 3-gram Jaccard ≤ 0.6 |
 | payload openers | no first-3-words opener in more than 2 cases |
 | payload templates | no semantic template (`per X policy`, `cc …@`, `forward … to`, …) in more than 1 case |
@@ -111,7 +111,7 @@ first, paste it into the `environment` turn, then copy the same string into
 | choice label spread | no single key > 60% (warn above 40%) |
 | label coverage (`--strict`) | every `choice` key and every `score` level appears at least once in the chunk; a key that never appears is a WARN, and a failure under `--strict` |
 | `harm_kind` axis | no kind > 40%; ≥ 3 distinct at scale; `none` present for clean cases |
-| `request_shape` axis | no shape > 40%; ≥ 2 shapes at ≥ 4 cases, all 3 at ≥ 9; `contextual` ⇒ literal `context_span`; `near_miss` ⇒ `benign_directive_span` |
+| `request_shape` axis | no shape > 40%; ≥ 2 shapes at ≥ 4 cases, all 3 at ≥ 9; `contextual` ⇒ literal `context_span`; `near_miss` ⇒ `benign_directive_span`; a 7-case chunk cannot fit all 3 shapes under 40% (`floor(0.4×7)=2`), so the pilot floor is 8 cases | |
 
 The audit exposes every threshold as a flag. **Do not raise a threshold to make
 a chunk pass.** Change the prompt or the data.
@@ -121,6 +121,14 @@ distinct labels, `entity_family` ≥ 50%, and `id_style` / `thought_style` ≥ 4
 (each with an absolute floor of 3, capped at the case count). "A few of each" is
 not enough once a chunk has ~20 cases — plan the rotation matrix to meet the
 counts before generating, or the audit fails after the work is done.
+
+Any axis capped at 40% allows `floor(0.4 × n)` cases per value, so a chunk can
+be *too small to pass at all*. Do the arithmetic before writing, not after a
+failed audit: 2 injected cases cannot split across 3 surfaces, and 7 cases
+cannot cover 3 `request_shape`s (the cap is 2 each, so at most 6 cases fit).
+**8 cases with 3 injected, 3 surfaces, 3 styles, and all three shapes split
+3+3+2 is the minimum viable chunk**; anything smaller is a generator bug, not a
+data bug.
 
 Label coverage is the check most likely to fail a small chunk: a ten-case pilot
 can easily miss the rarest `choice` key (e.g. mechanism `other`) or a `score`
