@@ -1,0 +1,84 @@
+{
+  "round": "r-20261029T212536-b6dcbe",
+  "created_at": "2026-10-29T21:25:36+00:00",
+  "baseline": [
+    "chunks/chunk_0001.jsonl",
+    "chunks/chunk_0002.jsonl",
+    "chunks/chunk_0004.jsonl",
+    "chunks/chunk_0005.jsonl",
+    "chunks/chunk_0006.jsonl",
+    "chunks/chunk_0007.jsonl",
+    "chunks/chunk_0008.jsonl",
+    "chunks/chunk_0009_40877273830.jsonl",
+    "chunks/chunk_0011_40884889843.jsonl",
+    "chunks/chunk_0012_40891905371.jsonl",
+    "inbox/chunk_0001.yaml",
+    "inbox/chunk_0002.yaml",
+    "inbox/chunk_0004.yaml",
+    "inbox/chunk_0005.yaml",
+    "inbox/chunk_0006.yaml",
+    "inbox/chunk_0007.yaml",
+    "inbox/chunk_0008.yaml",
+    "inbox/chunk_0009_40877273830.yaml",
+    "inbox/chunk_0011_40884889843.yaml",
+    "inbox/chunk_0012_40891905371.yaml"
+  ],
+  "allocations": [
+    {
+      "name": "chunk_0013_40957388105",
+      "base": "chunk_0013",
+      "run_suffix": "40957388105",
+      "yaml": "inbox/chunk_0013_40957388105.yaml",
+      "jsonl": "chunks/chunk_0013_40957388105.jsonl",
+      "status": "written",
+      "worker": null,
+      "allocated_at": "2026-10-29T21:25:36+00:00",
+      "written_at": "2026-10-29T21:26:48+00:00",
+      "sha256": "fe683b5751566332478d60820b85cfe737e3f89e99a5500032c1840e4123de8e",
+      "cases": 10
+    }
+  ],
+  "taxonomy_version": "ruhui-triage-v3",
+  "budget_hours": 0.5,
+  "salted_prompt": "work/salted_prompt.txt",
+  "salted_prompt_sha256": "0d100a43fdc7318467c7998ec33c3e6a35aa8980a378c79546bcebb034d2391c",
+  "salted_prompt_registered_at": "2026-10-29T21:25:36+00:00",
+  "email_batch": [
+    "gpsops@sidemirror53.com",
+    "qianoun@sidemirror53.com",
+    "tanaisabogan@yahoo.fi",
+    "workplace.safety@yahoo.fi",
+    "o.fiore@lobbyist.com",
+    "pharmacy10@lobbyist.com"
+  ],
+  "email_pairs": [
+    {
+      "domain": "sidemirror53.com",
+      "tier": "disposable",
+      "addresses": [
+        "gpsops@sidemirror53.com",
+        "qianoun@sidemirror53.com"
+      ]
+    },
+    {
+      "domain": "yahoo.fi",
+      "tier": "freemail",
+      "addresses": [
+        "tanaisabogan@yahoo.fi",
+        "workplace.safety@yahoo.fi"
+      ]
+    },
+    {
+      "domain": "lobbyist.com",
+      "tier": "freemail",
+      "addresses": [
+        "o.fiore@lobbyist.com",
+        "pharmacy10@lobbyist.com"
+      ]
+    }
+  ],
+  "email_manifest_source": "work/emails.json",
+  "email_batch_registered_at": "2026-10-29T21:25:36+00:00",
+  "run_suffix": "40957388105",
+  "updated_at": "2026-10-29T21:26:48+00:00"
+}
