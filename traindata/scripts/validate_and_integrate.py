@@ -61,9 +61,11 @@ Options
 Input tolerance
 ---------------
 JSON is read leniently: a JSON array or one pretty-printed object is accepted in
-place of JSONL, along with markdown fences, a UTF-8 BOM and trailing commas. For
-YAML case files, convert first with ``yaml_to_jsonl.py`` (or point audit/salt at
-the .yaml directly, which use the same loader).
+place of JSONL, along with markdown fences, a UTF-8 BOM and trailing commas.
+YAML case files are read directly (the shared loader in ``dataloader.py`` parses
+the stdlib YAML subset and normalises nested ``action``/``content``), so
+``--check data/inbox/chunk_0001.yaml --expand`` validates the YAML before
+``data_writer.py write`` emits a JSONL.
 """
 import argparse
 import glob

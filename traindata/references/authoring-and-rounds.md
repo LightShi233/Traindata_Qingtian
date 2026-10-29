@@ -307,6 +307,11 @@ Adjust per round with `allocate --budget-hours H --warn-fraction F`. Do not
 raise the budget to make a slow round pass; that is the same mistake as
 raising `--timeout`.
 
+The round-clock notice is **informational**, not a data defect:
+`check --round --strict` does not fail an over-budget round whose salvaged
+chunks are valid, because the contract treats a partial round committed at
+`stop` as a success.
+
 ## Robust input handling
 
 The loaders accept what a model actually emits, without relaxing content rules:
