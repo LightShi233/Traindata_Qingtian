@@ -51,8 +51,10 @@ jobs:
       # action 是用 OPENAI_MODEL 环境变量传模型 id 的，那属于 Runtime Model 路径，
       # 是否命中 provider 条目取决于 id/protocol/baseUrl 三者匹配。provider 层是
       # "impermeable"（完全替换下层），所以两处同时写不冲突：命中就用前者，没命中
-      # 就落到后者。只写一处的话，另一条路径会静默用内置默认值猜上下文大小。
-      # （opencode.jsonc 里那行 300k 是旧的，实际额度是 512k；那个文件已不参与 CI。）
+      # 就落到后者。provider 条目的 id/baseUrl 也用同一组 vars 表达式，这样
+      # AGNES_MODEL / AGNES_BASE_URL 覆盖后仍然命中，不会因为写死默认值而静默
+      # 退回内置上下文大小。只写一处的话，另一条路径会猜上下文大小。
+      # （旧的 opencode.jsonc 已删除；实际额度以这里为准：512k / 65536。）
       # 不要在这里设 tools.core —— 它是 allowlist，会把 python3 挡掉，导致
       # data_writer.py / validate_and_integrate.py / audit_diversity.py 全部无法执行。
       # 关于"看不到实时日志"：这不是配置错误，是这个 action 的固有限制。
@@ -84,10 +86,10 @@ jobs:
               "modelProviders": {
                 "openai": [
                   {
-                    "id": "agnes-3.0-flash",
-                    "name": "Agnes 3 Flash",
+                    "id": "${{ vars.AGNES_MODEL || 'agnes-3.0-flash' }}",
+                    "name": "Agnes (OpenAI-compatible)",
                     "envKey": "OPENAI_API_KEY",
-                    "baseUrl": "https://apihub.agnes-ai.com/v1",
+                    "baseUrl": "${{ vars.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1' }}",
                     "generationConfig": {
                       "contextWindowSize": 512000,
                       "samplingParams": {
@@ -115,7 +117,8 @@ jobs:
               }
             }
           prompt: |
-            安装并使用 ./traindata skill 为Ruhui编写训练数据。
+            按仓库内的 ./traindata/SKILL.md 契约与流程为 Ruhui 编写训练数据
+            （这是仓库内的 skill，不需要安装、复制或修改它）。
 
             第 0 条（元规则，优先于以下所有条款）：
             脚本是唯一权威。data_writer.py / validate_and_integrate.py / audit_diversity.py /
@@ -123,13 +126,17 @@ jobs:
             - 你必须服从脚本结论，不得改写、绕过、注释掉或放宽任何检查来让它变绿。
             - 不得用自己的判断、自述或"我认为已经修好了"代替脚本判定；
               每次修复后必须重跑脚本，以退出码为准。
-            - 子代理同样受此约束：主代理必须要求每个子代理重跑对应脚本并回报退出码，
-              子代理自述"已完成/已验证"而无脚本退出码的，一律不予采信。
+            - 子代理只负责把 YAML 写进分配给它的槽位；write 和两个 gate 只由主代理
+              执行，并以主代理看到的退出码为准。子代理自述"已完成/已验证"不构成验证；
+              主代理在 write 前先核对子代理回显的 traj_id / payload_span 是否与分配
+              清单一致，不一致就整块重派，不要替它补写。
             - 被脚本拒绝时，按它打印的提示修复数据并重跑；不得手改产物文件。
 
             硬性要求：
-            1. 只允许改动选定的输出根目录（默认 ./data，必须在项目内），
+            1. 只允许改动默认输出根目录 ./data（CI 的提交与校验只认这个根），
                严禁修改 .github/、traindata/ 或任何已有源码。
+               严禁修改 data/taxonomy.json：它是跨 chunk 的稳定契约，改了会让已通过的
+               数据全部失效；需要改 taxonomy 时停下报告，不要自行修改。
                严禁新增任何 .py 脚本（尤其是 author.py / gen.py 之类的生成器）：
                工具已经现成，你只负责输出 YAML 并调用 traindata/scripts/data_writer.py。
 
@@ -142,26 +149,46 @@ jobs:
                如果 brief 和文档没覆盖你的疑问，就按脚本的报错信息修数据并重跑，
                而不是翻源码猜。
 
-            2. 地址只能用 sample_emails.py 的输出：
-               先运行 sample_emails.py --scenario <safe|violation> --count N --cross-map
-               --manifest <path> --ledger <path> 拿到冻结批次，
-               再 allocate --count N --email-manifest <path> 登记它。
+            2. 地址和 salt 都要在写数据前锁定：
+               a) 地址：运行 sample_emails.py --scenario <safe|violation|injection>
+                  --count N --cross-map --manifest work/emails.json --ledger work/ledger.txt
+                  拿到冻结批次（这里的 N 是地址数，不是 case 数）。
+               b) salt：把本轮实际发给模型的生成提示词写到 work/prompt.txt，运行
+                  salt.py --in work/prompt.txt --out work/salted_prompt.txt。
+                  每一轮都必须登记它；不盖 salt 章的 chunk 不能提交（--require-salt 必失败）。
+               c) 再运行 allocate --count <chunk 槽位数> --email-manifest work/emails.json
+                  --salted-prompt work/salted_prompt.txt 登记。这里的 --count 是
+                  chunk 槽位数，不是 case 数或地址数；一个 pilot chunk 用 1。
                严禁 grep/cat/读取 traindata/assets/email_library/ 下任何文件，
                严禁自己挑域名或用 bash 循环去查"某域名在不在黑名单"。
                理由：那是 28 万行 blocklist，逐个 grep 既慢又没意义；
                手工挑域名会绕过分层加权与 cross-map，让域名变成标签信号。
                write 会拒绝：未登记批次，或样本里出现批次外地址。
 
-            3. 先用 data_writer.py allocate --count N 领取文件名，把纯 YAML 写到它打印的
-               data/inbox/chunk_NNNN.yaml（action 写成映射、长文本用 | 块标量），
-               再执行 data_writer.py write 转换。严禁手写、手改或另存 jsonl。
-               即使使用子代理，也由主代理统一 allocate，子代理只写分配给它的 YAML 槽位；
-               子代理完成后必须自己跑 write 并回报退出码，主代理再独立复跑一次确认。
+            3. 只把纯 YAML 写到 allocate 打印的 data/inbox/chunk_NNNN.yaml
+               （action 写成映射、长文本用 | 块标量），然后由主代理执行 write 转换。
+               严禁手写、手改或另存 jsonl。已提交的 chunk 是只读的，不能再改；
+               修正只针对本轮未提交的 chunk：discard 退回 pending 后同名重写。
+               即使使用子代理，也由主代理统一 allocate / write / 跑 gate；
+               子代理只把自己那个 chunk 的 YAML 写进分配好的槽位，并回显它写的
+               traj_id 与 payload_span，不执行 write 或 gate。
 
             4. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
                严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
 
-            5. 提交前必须运行 data_writer.py check --round <id> --strict 且通过；
+            5. 每个 chunk 固定按这个顺序，不要跳步：
+               预检（YAML 可直接读；此时还没有 salt 章，不要带 --require-salt）：
+                 validate_and_integrate.py --check data/inbox/chunk_NNNN.yaml
+                   --taxonomy data/taxonomy.json --expand --require-complete-cases --timeout 300
+                 audit_diversity.py --chunks data/inbox/chunk_NNNN.yaml
+                   --taxonomy data/taxonomy.json --require-injection --strict
+                   --require-taxonomy-axes --email-manifest work/emails.json --timeout 300
+               通过后 write，再对 data/chunks/chunk_NNNN.jsonl 重跑同样两条命令，
+               audit 这次加 --require-salt；最后运行 salt.py --check 该 chunk。
+               跨 chunk 去重：把其它轮已验收的 data/rounds/<round>/soft_*.jsonl
+               用 --leak 传给 validator；--auto-leak 只搜输入旁边，搜不到 rounds/。
+               chunk 通过后才 merge --round <id>；提交前必须运行
+               data_writer.py check --round <id> --strict 且通过。
                严禁提交任何临时/备份文件（.tmp-*、*.tmp、*.bak、__pycache__ 等）。
 
             6. 转换与两个 gate 都要带 --timeout；退出码 3 表示该 chunk 未通过，
@@ -182,10 +209,14 @@ jobs:
                  git push -u origin "$TRAINDATA_BRANCH"
                  gh pr create --base main --head "$TRAINDATA_BRANCH" \
                    --title "[traindata_add] <一句话说明>" --body-file <你写的 body 文件>
-               PR body 里必须贴出各 gate 的退出码，以及本轮的场景数与 chunk 数。
+               PR body 里必须贴出 validator、audit（预检/复检）、salt.py --check、
+               data_writer.py check 的退出码，以及本轮的场景数与 chunk 数。
+               不要提交 data/taxonomy.json 的改动；CI 会拒绝验收。
                如果本轮没有任何合法产出，不要开 PR，直接以失败结束并说明原因。
 
-            9. 绝对严禁一次产出超过10个样本，但使用子代理，并且有相应验证时本规则例外
+            9. 每个 chunk 8–12 个 case（一个 case 会展开 2–4 条记录，别把记录数当
+               case 数）。并行时每个子代理只写自己的一个 chunk，仍遵守 8–12；
+               不要在一次模型调用里塞进超过 12 个 case，也不要复制场景凑数。
             10. 特别强调多样性原则：用脚本检查，多样性不足时强制更改，或用子代理更改
 
             ${{ inputs.prompt_extra }}
@@ -204,10 +235,119 @@ jobs:
             fi
           done
 
+      # 模型自述的退出码不算数：开 PR 前 workflow 自己用同一套脚本复核本分支
+      # 新增的 chunk。校验失败就不写 work/gates_ok，兜底 PR 步骤会因此跳过。
+      # 这一层同时守着 skill 的硬规则：只动 ./data、不改 taxonomy、不删文件、
+      # 每个 chunk 都带宿主 salt 章。
+      - name: Verify generated chunks with the skill gates
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          rm -f work/gates_ok
+          mkdir -p work
+
+          if ! git fetch --no-tags origin main:refs/remotes/origin/main >/dev/null 2>&1; then
+            echo "::warning::fetch origin/main 失败，无法确定本分支基线；不创建兜底 PR"
+            exit 0
+          fi
+          BASE=$(git merge-base origin/main HEAD)
+          DIRTY=$(git status --porcelain -- data/chunks data/rounds data/taxonomy.json || true)
+          if [ -n "$DIRTY" ]; then
+            echo "::error::data/chunks、data/rounds 或 data/taxonomy.json 有未提交改动；本轮必须以 commit 交付"
+            printf '%s\n' "$DIRTY"
+            exit 1
+          fi
+          CHANGED=$(git diff --name-only --diff-filter=AM "$BASE"..HEAD -- 'data/chunks/chunk_*.jsonl' || true)
+          NEW_ROUNDS=$(git diff --name-only --diff-filter=AM "$BASE"..HEAD -- 'data/rounds/*.json' || true)
+          if [ -z "$CHANGED" ] && [ -z "$NEW_ROUNDS" ]; then
+            echo "本分支没有新增数据，跳过 gate 校验"
+            exit 0
+          fi
+          if [ -z "$CHANGED" ]; then
+            echo "::error::本分支有新的 round manifest，但没有任何 chunk；不算合法产出"
+            exit 1
+          fi
+
+          OUTSIDE=$(git diff --name-only "$BASE"..HEAD | grep -v '^data/' || true)
+          if [ -n "$OUTSIDE" ]; then
+            echo "::error::本分支改动了 data/ 之外的文件，训练数据轮次不允许："
+            printf '%s\n' "$OUTSIDE"
+            exit 1
+          fi
+          DELETED=$(git diff --name-only --diff-filter=D "$BASE"..HEAD -- data/ || true)
+          if [ -n "$DELETED" ]; then
+            echo "::error::本分支删除了 data/ 下的文件，训练数据轮次只允许新增："
+            printf '%s\n' "$DELETED"
+            exit 1
+          fi
+          MODIFIED=$(git diff --name-only --diff-filter=M "$BASE"..HEAD -- 'data/chunks/chunk_*.jsonl' 'data/inbox/chunk_*.yaml' || true)
+          if [ -n "$MODIFIED" ]; then
+            echo "::error::本分支修改了已存在的 chunk；旧 chunk 不允许改写，新数据请走新槽位："
+            printf '%s\n' "$MODIFIED"
+            exit 1
+          fi
+          if ! git diff --quiet "$BASE"..HEAD -- data/taxonomy.json; then
+            echo "::error::data/taxonomy.json 被改动；它是跨 chunk 的稳定契约，拒绝验收"
+            exit 1
+          fi
+
+          # 从 round manifest 重建邮箱白名单，不依赖 work/ 里的临时文件。
+          # email_pairs 也一并恢复，否则 audit 会跳过 cross-map 检查。
+          python3 - <<'PY'
+          import glob, json
+          emails, pairs, pair_keys = [], [], set()
+          for path in sorted(glob.glob("data/rounds/*.json")):
+              with open(path, encoding="utf-8-sig") as f:
+                  doc = json.load(f)
+              for addr in doc.get("email_batch", []):
+                  if addr not in emails:
+                      emails.append(addr)
+              for pair in doc.get("email_pairs", []) or []:
+                  key = json.dumps(pair, sort_keys=True, ensure_ascii=False)
+                  if key not in pair_keys:
+                      pair_keys.add(key)
+                      pairs.append(pair)
+          out = {"emails": emails}
+          if pairs:
+              out["pairs"] = pairs
+          if emails:
+              with open("work/verify_emails.json", "w", encoding="utf-8") as f:
+                  json.dump(out, f)
+          print(f"email whitelist: {len(emails)} addresses / {len(pairs)} pairs from round manifests")
+          PY
+          MANIFEST=()
+          if [ -s work/verify_emails.json ]; then
+            MANIFEST=(--email-manifest work/verify_emails.json)
+          fi
+
+          for f in $CHANGED; do
+            echo "::group::gates $f"
+            python3 traindata/scripts/validate_and_integrate.py --check "$f" \
+              --taxonomy data/taxonomy.json --expand --require-complete-cases --timeout 300
+            python3 traindata/scripts/audit_diversity.py --chunks "$f" \
+              --taxonomy data/taxonomy.json --require-injection --strict \
+              --require-taxonomy-axes --require-salt --require-library-emails \
+              ${MANIFEST[@]+"${MANIFEST[@]}"} --timeout 300
+            python3 traindata/scripts/salt.py --check "$f"
+            echo "::endgroup::"
+          done
+
+          if [ -n "$NEW_ROUNDS" ]; then
+            for m in $NEW_ROUNDS; do
+              r=$(basename "$m" .json)
+              python3 traindata/scripts/data_writer.py check --round "$r" --strict
+            done
+          else
+            python3 traindata/scripts/data_writer.py check --strict
+          fi
+
+          touch work/gates_ok
+          echo "所有 gate 通过；允许创建兜底 PR"
+
       # 兜底：模型没按第 8 条开 PR 时，把它在分支上的提交补成一个 PR，
       # 避免"跑了 3 小时、数据在分支上、却看不到 PR"。
       - name: Ensure pull request exists
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -215,6 +355,9 @@ jobs:
           BRANCH="${TRAINDATA_BRANCH:-}"
           if [ -z "$BRANCH" ]; then
             echo "没有分支信息，跳过"; exit 0
+          fi
+          if [ ! -f work/gates_ok ]; then
+            echo "gate 复核未通过或没有新增 chunk；不创建兜底 PR"; exit 0
           fi
           if ! git rev-parse --verify --quiet "origin/$BRANCH" >/dev/null; then
             git push -u origin "$BRANCH" || { echo "分支没有可推送内容，跳过"; exit 0; }
@@ -232,4 +375,4 @@ jobs:
           fi
           gh pr create --base main --head "$BRANCH" \
             --title "[traindata_add] 自动补充：${BRANCH}" \
-            --body "模型未自行开 PR，此处兜底创建。请先在 Actions 日志里确认两个 gate 的退出码为 0 再合并。"
+            --body "模型未自行开 PR，此处兜底创建。workflow 已在 Verify generated chunks 步骤对新增 chunk 重跑 validator / audit / salt / check，全部退出码为 0 才会走到这里。"

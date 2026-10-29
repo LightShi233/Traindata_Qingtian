@@ -22,7 +22,7 @@ manifest, so a round can never sweep in another round's or a hand-written file.
 
     # 2b. if the chunk then fails validate/audit, return it to pending and
     #     rewrite the same slot after fixing the YAML (the YAML is kept):
-    python3 traindata/scripts/data_writer.py discard --round <id> --name chunk_0003
+    python3 traindata/scripts/data_writer.py discard --round <id> --name chunk_0003 --reason audit:injection_surface
 
     # 3. merge ONLY this round's written chunks, expanding to records
     python3 traindata/scripts/data_writer.py merge --round <id> \
@@ -404,6 +404,12 @@ def cmd_allocate(args):
                 raise SystemExit(f"{args.email_manifest} 里没有 emails；"
                                  "用 sample_emails.py --cross-map --manifest 生成")
             manifest["email_batch"] = batch
+            pairs = batch_doc.get("pairs")
+            if isinstance(pairs, list) and pairs:
+                # Keep the cross-map assignment durable: CI rebuilds the audit
+                # whitelist from the round manifest, and without these pairs the
+                # "same domain in clean and violating contexts" check is skipped.
+                manifest["email_pairs"] = pairs
             manifest["email_manifest_source"] = _display(args.email_manifest)
             manifest["email_batch_registered_at"] = _now()
         used = chunk_numbers(os.path.join(data_dir, "chunks"))
@@ -886,9 +892,13 @@ BRIEF = """\
 === traindata 速查（agent 照此执行，无需阅读脚本源码）===
 
 流程（每轮固定，不要自造步骤）：
-  0. sample_emails.py --scenario <safe|violation> --count N --cross-map
+  0. sample_emails.py --scenario <safe|violation|injection> --count N --cross-map
        --manifest <path> --ledger <path>     -> 冻结的地址批次（原样使用）
-  1. allocate --count 1 --email-manifest <path> [--salted-prompt <path>]
+       这里的 --count 是地址数，不是 case 数。
+  0b. salt.py --in <prompt> --out <salted_prompt>
+       把本轮实际发给模型的提示词先 salt；allocate 时用 --salted-prompt 登记。
+       不登记的轮次 write 不盖 salt 章，--require-salt 必失败。
+  1. allocate --count 1 --email-manifest <path> --salted-prompt <path>
        --count 是 chunk 槽位数，不是 case 数；一个 pilot chunk 用 --count 1。
        一个 chunk 的全部 case 写进同一个 YAML；多分配的槽位保持 pending、不会被 merge。
   2. 写 YAML（一个 chunk 一个文件，不要写 jsonl、不要写别的路径）
@@ -898,12 +908,16 @@ BRIEF = """\
        audit_diversity.py --chunks <yaml> --taxonomy data/taxonomy.json
          --require-injection --strict --require-taxonomy-axes
          --email-manifest <path> --timeout 300
+       跨 chunk 泄漏：validator 加 --leak data/rounds/<其它轮>/soft_*.jsonl
+       （--auto-leak 只搜输入旁边，round 产物在 rounds/ 下，搜不到）。
   4. write --round <id> --name chunk_NNNN --in <那个 yaml>   （此时才盖 salt 章）
-  5. 再跑一遍上面的两个网关，这次 audit 加 --require-salt
+  5. 再跑一遍上面的两个网关，这次 audit 加 --require-salt；
+     再运行 salt.py --check <chunk> 确认每个 case 都有宿主章
   6. merge --round <id>      （只合并 written，discarded/pending 自动跳过）
   7. check --round <id> --strict
   超时由脚本判定：warn 收尾，stop 用 salvage --commit 交付已完成部分。
   脚本退出码是唯一权威：0 通过，非 0 未通过。不要改检查来让它变绿。
+  data/taxonomy.json 是跨 chunk 的稳定契约，不要修改；改了已通过的数据全部失效。
 
 网关失败后的唯一正确动作（不要 rm、不要手改 jsonl、不要放宽阈值）：
   - write 之前就失败：直接改 YAML，重跑第 3 步
@@ -937,7 +951,8 @@ YAML case 的最小形状（每个 case 一个映射）：
     injection_present(bool) / external_contact(bool)             必填
     harm_kind / request_shape                                    --require-taxonomy-axes 时必填
     注入时还要 injection_surface / payload_style / payload_span（文本里的原文子串）
-    near_miss 还要 benign_directive_span（仅 clean case，且必须真的出现在 turns 里）
+    request_shape=contextual 时还要 context_span（turns 里的原文子串）
+    request_shape=near_miss 还要 benign_directive_span（仅 clean case，且必须真的出现在 turns 里）
     不要在 meta 里写 salted —— 由宿主脚本盖
 
 最常被脚本拒绝的原因（按出现频率）：
@@ -1063,7 +1078,10 @@ def cmd_check(args):
             raise SystemExit(f"没有这个 round: {args.round}")
         clock = round_clock(manifest)
         if clock["tier"] != "ok":
-            add("WARN", "time",
+            # Budget state is not a data defect: the contract explicitly says a
+            # salvaged partial round is a success. Keep it informational so
+            # --strict cannot fail a valid stop-loss delivery.
+            add("INFO", "time",
                 f"round 已用 {_fmt_duration(clock['elapsed_s'])} / 预算 "
                 f"{_fmt_duration(clock['budget_s'])}（{clock['tier']}）；"
                 "先 salvage 已完成部分，不要再开新场景")

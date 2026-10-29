@@ -1193,9 +1193,9 @@ def main():
             print(" -", err)
         sys.exit(1)
     if skipped and not cases:
-        print(f"{skipped} 行是记录形式，不是 case 形式；"
+        print(f"{skipped} 行是记录形式（没有 turns），不是 case 形式；"
               "多样性审计必须针对 chunk（每个场景一行）。"
-              "若输入是 YAML，请先用 yaml_to_jsonl.py 转换。")
+              "请对 chunk 的 YAML/JSONL 运行审计，不要先把记录形式转来转去。")
         sys.exit(2)
 
     audit = Audit()
@@ -1225,7 +1225,7 @@ def main():
         sys.exit(3)
     except (TypeError, KeyError, AttributeError, ValueError) as exc:
         print(f"chunk 结构异常，无法审计: {type(exc).__name__}: {exc}")
-        print("  请先用 yaml_to_jsonl.py 归一化（或修好 chunk）后重跑；不要手改标签。")
+        print("  请保留 case 形式（每个场景一行、带 turns 列表）修好 chunk 后重跑；不要手改标签。")
         sys.exit(1)
 
     if args.strict:

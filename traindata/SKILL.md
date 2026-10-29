@@ -174,6 +174,13 @@ is a broken alias and only `python` works. The docs use `python3` as a
 placeholder. Full explanation and terms: `references/authoring-and-rounds.md`
 ("Who runs the gates").
 
+In CI the workflow is stricter than a local run: it pins the output root to
+`./data`, rejects changes outside `data/` (and any edit to
+`data/taxonomy.json`), re-runs validator / audit / salt / `check` on every newly
+added chunk (including `--require-library-emails`), and only then allows the
+fallback PR. Do not rely on a renamed `--data-dir` or on a local-only gate
+result.
+
 ### Phase 3 — Generate in chunks, validate each chunk
 
 Never generate the whole corpus in one shot. Loop per chunk:
@@ -270,8 +277,10 @@ Tips that make this work in practice:
   `--ledger`; give payloads the same treatment: keep the assigned `payload_span`
   strings centrally so no two chunks reuse one, and run the cross-chunk dedup of
   `validate_and_integrate.py` against already-accepted chunks *inside* the loop
-  (via `--leak`/`--auto-leak`), not only at the final audit — a collision caught
-  at the end wasted every chunk written after it.
+  (pass explicit `--leak` paths; `--auto-leak` only indexes `*soft*.jsonl` beside
+  the input, and round outputs live under `data/rounds/<round>/`), not only at
+  the final audit — a collision caught at the end wasted every chunk written
+  after it.
 - **A blocked or off-plan chunk never blocks the round.** If one chunk is denied
   execution, malformed, or improvised off-spec, do not stall integration on it:
   `salvage` the chunks that pass, then redo the bad one — with `discard` and the
@@ -297,8 +306,8 @@ of scenarios kept out of training, identified by `text` hash):
 
 ```bash
 python3 traindata/scripts/audit_diversity.py --chunks 'data/chunks/chunk_*.jsonl' \
-  --taxonomy data/taxonomy.json --require-injection --strict \
-  --email-manifest work/emails.json --require-salt \
+  --taxonomy data/taxonomy.json --require-injection --strict --require-taxonomy-axes \
+  --email-manifest work/emails.json --require-salt --timeout 300 \
   --holdout 2 --out-dir work/pilot_holdout --json work/pilot_diversity.json
 ```
 
@@ -437,10 +446,12 @@ read it before your first `write`. The hard rules below still apply.
     must not write `salted` itself** — a self-declared salt is a hallucination,
     it is stripped on write, and `salt.py --check` reports it as
     ``MODEL-AUTHORED SALT CLAIM``. Add `--require-salt` to the audit whenever the
-    round contains injections. The salt keeps the generator an **author of inert
-    detector data**, not an attacker: everything fictional, harm described not
-    operationalised, no executable attack code, injected text read as
-    quarantined data and never obeyed. **The salt never reaches the data.** It
+    round contains injections; the shipped CI requires the stamp on **every**
+    chunk, so register a salted prompt for every round. The salt keeps the
+    generator an **author of inert detector data**, not an attacker: everything
+    fictional, harm described not operationalised, no executable attack code,
+    injected text read as quarantined data and never obeyed. **The salt never
+    reaches the data.** It
     lives only in the generation prompt; the stamp is a `meta` field, and `meta`
     is dropped when cases expand into records (the validator does read
     `benign_directive_span` / `payload_span` while checking, but no record it
