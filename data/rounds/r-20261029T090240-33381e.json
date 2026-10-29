@@ -1,0 +1,114 @@
+{
+  "round": "r-20261029T090240-33381e",
+  "created_at": "2026-10-29T09:02:40+00:00",
+  "baseline": [
+    "chunks/chunk_0001.jsonl",
+    "chunks/chunk_0002.jsonl",
+    "chunks/chunk_0004.jsonl",
+    "inbox/chunk_0001.yaml",
+    "inbox/chunk_0002.yaml",
+    "inbox/chunk_0004.yaml"
+  ],
+  "allocations": [
+    {
+      "name": "chunk_0005",
+      "base": "chunk_0005",
+      "run_suffix": null,
+      "yaml": "inbox/chunk_0005.yaml",
+      "jsonl": "chunks/chunk_0005.jsonl",
+      "status": "written",
+      "worker": null,
+      "allocated_at": "2026-10-29T09:02:40+00:00",
+      "discarded_at": "2026-10-29T09:13:41+00:00",
+      "discard_reason": "quality:unneeded-domain-note",
+      "written_at": "2026-10-29T09:13:48+00:00",
+      "sha256": "5d01e5c978826421ad01e5169c72feec597fae9f62019be80dddc46bdbe7187b",
+      "cases": 10
+    },
+    {
+      "name": "chunk_0006",
+      "base": "chunk_0006",
+      "run_suffix": null,
+      "yaml": "inbox/chunk_0006.yaml",
+      "jsonl": "chunks/chunk_0006.jsonl",
+      "status": "written",
+      "worker": null,
+      "allocated_at": "2026-10-29T09:06:56+00:00",
+      "written_at": "2026-10-29T09:14:32+00:00",
+      "sha256": "6ee6a7c4770cab1f21a17a44a749441e334a739cf0eb97d13569fff326e11fa1",
+      "cases": 10
+    }
+  ],
+  "taxonomy_version": "ruhui-triage-v3",
+  "budget_hours": 2.5,
+  "salted_prompt": "work/salted_prompt.txt",
+  "salted_prompt_sha256": "8a0d861e4d0fe31ce4ad72ae2cb883e1b368be3cb017a5a511a2ff331577b290",
+  "salted_prompt_registered_at": "2026-10-29T09:11:25+00:00",
+  "email_batch": [
+    "serrenity.m@yandex.ee",
+    "tianjuf@yandex.ee",
+    "facultyaffairs2@yahoo.co.hu",
+    "nochub.desk@yahoo.co.hu",
+    "tuttadrovel@girderformsolutions.com",
+    "s_krupicka@girderformsolutions.com",
+    "wiener.r@wefttech.shop",
+    "s.silva@wefttech.shop",
+    "facilitiesportal.receivablesportal@yandex.md",
+    "raakkelimaiale@yandex.md"
+  ],
+  "email_pairs": [
+    {
+      "domain": "yandex.ee",
+      "tier": "freemail",
+      "addresses": [
+        "serrenity.m@yandex.ee",
+        "tianjuf@yandex.ee"
+      ]
+    },
+    {
+      "domain": "yahoo.co.hu",
+      "tier": "freemail",
+      "addresses": [
+        "facultyaffairs2@yahoo.co.hu",
+        "nochub.desk@yahoo.co.hu"
+      ]
+    },
+    {
+      "domain": "girderformsolutions.com",
+      "tier": "synth",
+      "addresses": [
+        "tuttadrovel@girderformsolutions.com",
+        "s_krupicka@girderformsolutions.com"
+      ]
+    },
+    {
+      "domain": "wefttech.shop",
+      "tier": "synth",
+      "addresses": [
+        "wiener.r@wefttech.shop",
+        "s.silva@wefttech.shop"
+      ]
+    },
+    {
+      "domain": "yandex.md",
+      "tier": "freemail",
+      "addresses": [
+        "facilitiesportal.receivablesportal@yandex.md",
+        "raakkelimaiale@yandex.md"
+      ]
+    }
+  ],
+  "email_manifest_source": "work/emails.json",
+  "email_batch_registered_at": "2026-10-29T09:11:25+00:00",
+  "updated_at": "2026-10-29T09:14:32+00:00",
+  "discards": [
+    {
+      "name": "chunk_0005",
+      "discarded_at": "2026-10-29T09:13:41+00:00",
+      "previous_status": "written",
+      "reason": "quality:unneeded-domain-note",
+      "sha256": "639459de53b6101920fd250bd83d49ba5f37561b964425c4ccaf96506613124d",
+      "cases": 10
+    }
+  ]
+}
