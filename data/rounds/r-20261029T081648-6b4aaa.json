@@ -1,0 +1,123 @@
+{
+  "round": "r-20261029T081648-6b4aaa",
+  "created_at": "2026-10-29T08:16:48+00:00",
+  "baseline": [
+    "chunks/chunk_0001.jsonl",
+    "inbox/chunk_0001.yaml"
+  ],
+  "allocations": [
+    {
+      "name": "chunk_0002",
+      "yaml": "inbox/chunk_0002.yaml",
+      "jsonl": "chunks/chunk_0002.jsonl",
+      "status": "written",
+      "worker": null,
+      "allocated_at": "2026-10-29T08:16:48+00:00",
+      "written_at": "2026-10-29T08:18:27+00:00",
+      "sha256": "20c774937a3b9fafee1a89340e3e44635b47e9d920cfcf8f89304b576d9e5d77",
+      "cases": 10
+    },
+    {
+      "name": "chunk_0004",
+      "yaml": "inbox/chunk_0004.yaml",
+      "jsonl": "chunks/chunk_0004.jsonl",
+      "status": "written",
+      "worker": null,
+      "allocated_at": "2026-10-29T08:22:01+00:00",
+      "written_at": "2026-10-29T08:22:13+00:00",
+      "sha256": "d04996be8c72793dd5e50e521d180f236d575bfd3fcc3a8a81937ad1faaf61fc",
+      "cases": 8
+    }
+  ],
+  "budget_hours": 3.0,
+  "salted_prompt": "work/salted_prompt.txt",
+  "salted_prompt_sha256": "c3a1fd705f860a7d99897e08eedc9bd775ad7d1bd538b367ab371b838779684d",
+  "salted_prompt_registered_at": "2026-10-29T08:16:48+00:00",
+  "email_batch": [
+    "qianoun@sidemirror53.com",
+    "tanaisabogan@sidemirror53.com",
+    "workplace.safety@yahoo.fi",
+    "o.fiore@yahoo.fi",
+    "pharmacy10@lobbyist.com",
+    "customsteam.middleoffice@lobbyist.com",
+    "caudillo_saral@part107waiver.com",
+    "atovar@part107waiver.com",
+    "pressdivision@gmx.fr",
+    "a_blatter@gmx.fr",
+    "ljudmil_caal@atheist.com",
+    "nocupdates@atheist.com",
+    "s_groover@yahoo.ua",
+    "jianvrasbery@yahoo.ua",
+    "regetta.debaecke@boardermail.com",
+    "ndemasi@boardermail.com"
+  ],
+  "email_pairs": [
+    {
+      "domain": "sidemirror53.com",
+      "tier": "disposable",
+      "addresses": [
+        "qianoun@sidemirror53.com",
+        "tanaisabogan@sidemirror53.com"
+      ]
+    },
+    {
+      "domain": "yahoo.fi",
+      "tier": "freemail",
+      "addresses": [
+        "workplace.safety@yahoo.fi",
+        "o.fiore@yahoo.fi"
+      ]
+    },
+    {
+      "domain": "lobbyist.com",
+      "tier": "freemail",
+      "addresses": [
+        "pharmacy10@lobbyist.com",
+        "customsteam.middleoffice@lobbyist.com"
+      ]
+    },
+    {
+      "domain": "part107waiver.com",
+      "tier": "disposable",
+      "addresses": [
+        "caudillo_saral@part107waiver.com",
+        "atovar@part107waiver.com"
+      ]
+    },
+    {
+      "domain": "gmx.fr",
+      "tier": "freemail",
+      "addresses": [
+        "pressdivision@gmx.fr",
+        "a_blatter@gmx.fr"
+      ]
+    },
+    {
+      "domain": "atheist.com",
+      "tier": "freemail",
+      "addresses": [
+        "ljudmil_caal@atheist.com",
+        "nocupdates@atheist.com"
+      ]
+    },
+    {
+      "domain": "yahoo.ua",
+      "tier": "freemail",
+      "addresses": [
+        "s_groover@yahoo.ua",
+        "jianvrasbery@yahoo.ua"
+      ]
+    },
+    {
+      "domain": "boardermail.com",
+      "tier": "freemail",
+      "addresses": [
+        "regetta.debaecke@boardermail.com",
+        "ndemasi@boardermail.com"
+      ]
+    }
+  ],
+  "email_manifest_source": "work/emails_combined.json",
+  "email_batch_registered_at": "2026-10-29T08:22:01+00:00",
+  "updated_at": "2026-10-29T08:22:13+00:00"
+}
