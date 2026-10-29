@@ -1,0 +1,32 @@
+{
+  "round": "r-20261029T151229-6bcb40",
+  "created_at": "2026-10-29T07:12:29+00:00",
+  "baseline": [],
+  "allocations": [
+    {
+      "name": "chunk_0001",
+      "yaml": "inbox/chunk_0001.yaml",
+      "jsonl": "chunks/chunk_0001.jsonl",
+      "status": "written",
+      "worker": null,
+      "allocated_at": "2026-10-29T07:12:29+00:00",
+      "written_at": "2026-10-29T07:12:36+00:00",
+      "sha256": "9d2692d97a61b7949aa84979b7f51f7b9c4b7bbefe90bdd22338260c1986d017",
+      "cases": 8
+    }
+  ],
+  "salted_prompt": "work/salted_prompt.txt",
+  "salted_prompt_sha256": "338b5060eeaeedc9aa1f587bead2354c6ec18a7064ebf9a46137a11b152ee71d",
+  "salted_prompt_registered_at": "2026-10-29T07:12:29+00:00",
+  "email_batch": [
+    "complianceinquiries-warehousemanagement@jhjty56rrdd.gq",
+    "threatintel@jhjty56rrdd.gq",
+    "s_eavey@yahoo.ru",
+    "thamosk@yahoo.ru",
+    "payrollunit.oncalloffice@yahoo.at",
+    "c.lehmann@yahoo.at"
+  ],
+  "email_manifest_source": "work/emails.json",
+  "email_batch_registered_at": "2026-10-29T07:12:29+00:00",
+  "updated_at": "2026-10-29T07:12:36+00:00"
+}
