@@ -1,0 +1,110 @@
+{
+  "round": "r-20261029T134809-8f320e",
+  "created_at": "2026-10-29T13:48:09+00:00",
+  "baseline": [
+    "chunks/chunk_0001.jsonl",
+    "chunks/chunk_0002.jsonl",
+    "chunks/chunk_0004.jsonl",
+    "chunks/chunk_0005.jsonl",
+    "chunks/chunk_0006.jsonl",
+    "chunks/chunk_0007.jsonl",
+    "chunks/chunk_0008.jsonl",
+    "chunks/chunk_0009_40877273830.jsonl",
+    "inbox/chunk_0001.yaml",
+    "inbox/chunk_0002.yaml",
+    "inbox/chunk_0004.yaml",
+    "inbox/chunk_0005.yaml",
+    "inbox/chunk_0006.yaml",
+    "inbox/chunk_0007.yaml",
+    "inbox/chunk_0008.yaml",
+    "inbox/chunk_0009_40877273830.yaml"
+  ],
+  "allocations": [
+    {
+      "name": "chunk_0010_40884889843",
+      "base": "chunk_0010",
+      "run_suffix": "40884889843",
+      "yaml": "inbox/chunk_0010_40884889843.yaml",
+      "jsonl": "chunks/chunk_0010_40884889843.jsonl",
+      "status": "pending",
+      "worker": null,
+      "allocated_at": "2026-10-29T13:48:09+00:00"
+    },
+    {
+      "name": "chunk_0011_40884889843",
+      "base": "chunk_0011",
+      "run_suffix": "40884889843",
+      "yaml": "inbox/chunk_0011_40884889843.yaml",
+      "jsonl": "chunks/chunk_0011_40884889843.jsonl",
+      "status": "written",
+      "worker": null,
+      "allocated_at": "2026-10-29T13:51:42+00:00",
+      "written_at": "2026-10-29T13:51:57+00:00",
+      "sha256": "c148337a4e8511af0b7c7c24150f4ab5e5e4b3d2206790b4d3b3666d0d00c92e",
+      "cases": 10
+    }
+  ],
+  "taxonomy_version": "ruhui-triage-v3",
+  "budget_hours": 0.5,
+  "salted_prompt": "work/salted_prompt.txt",
+  "salted_prompt_sha256": "4011a3327a8c72f6a914263e6d60c6e572bf523983ee9086f0a20e9d7785647f",
+  "salted_prompt_registered_at": "2026-10-29T13:51:42+00:00",
+  "email_batch": [
+    "treasuryreports@castline.works",
+    "rhoans@castline.works",
+    "compliancegroup.desk@birdlover.com",
+    "cerellia_joerg@birdlover.com",
+    "lemontc@hotmail.ac",
+    "settlementops@hotmail.ac",
+    "wmallacara@yandex.tj",
+    "incidentsservices.linguistics@yandex.tj",
+    "jaree_stramiello@onet.pl",
+    "tilisao@onet.pl"
+  ],
+  "email_pairs": [
+    {
+      "domain": "castline.works",
+      "tier": "synth",
+      "addresses": [
+        "treasuryreports@castline.works",
+        "rhoans@castline.works"
+      ]
+    },
+    {
+      "domain": "birdlover.com",
+      "tier": "freemail",
+      "addresses": [
+        "compliancegroup.desk@birdlover.com",
+        "cerellia_joerg@birdlover.com"
+      ]
+    },
+    {
+      "domain": "hotmail.ac",
+      "tier": "freemail",
+      "addresses": [
+        "lemontc@hotmail.ac",
+        "settlementops@hotmail.ac"
+      ]
+    },
+    {
+      "domain": "yandex.tj",
+      "tier": "freemail",
+      "addresses": [
+        "wmallacara@yandex.tj",
+        "incidentsservices.linguistics@yandex.tj"
+      ]
+    },
+    {
+      "domain": "onet.pl",
+      "tier": "freemail",
+      "addresses": [
+        "jaree_stramiello@onet.pl",
+        "tilisao@onet.pl"
+      ]
+    }
+  ],
+  "email_manifest_source": "work/emails.json",
+  "email_batch_registered_at": "2026-10-29T13:51:42+00:00",
+  "run_suffix": "40884889843",
+  "updated_at": "2026-10-29T13:51:57+00:00"
+}
