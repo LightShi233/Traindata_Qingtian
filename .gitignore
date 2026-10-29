@@ -19,5 +19,8 @@ data/rounds/.lock
 # `salvage --commit` cannot sweep it in.
 /work/
 
+# local Qoder CLI permission allow-list (full of local absolute paths)
+/.qoder/settings.local.json
+
 # agent instructions are local-only, not part of the project
 AGENTS.md
