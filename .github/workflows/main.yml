@@ -8,6 +8,10 @@ on:
         required: false
         default: ''
         type: string
+  schedule:
+    # 每 3 小时一次。GitHub cron 走 UTC，且高峰时段可能延迟几分钟到十几分钟；
+    # 不追求精确对齐，只要两轮之间留足间隔。用 :17 而不是整点，整点最拥堵。
+    - cron: '17 */3 * * *'
 
 # id-token: write 是 Qoder Action 的硬要求：它用 OIDC 把
 # (GitHub OIDC token + QODER_PERSONAL_ACCESS_TOKEN) 换成 qoderai App 的
@@ -25,7 +29,10 @@ concurrency:
 jobs:
   traindata-gen:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    # 必须小于 cron 周期（180 分钟），否则跑满时会与下一轮重叠、队列持续积压。
+    # 留 15 分钟给 checkout / gate / PR；模型侧预算设为 2.5 小时，早于这个硬超时，
+    # 这样 salvage 止损来得及在 job 被强杀之前把成品提交出去。
+    timeout-minutes: 165
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -157,6 +164,15 @@ jobs:
             4. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
                严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
 
+            4.1 cron 每 3 小时会起一轮，所以可能同时有多个 PR 在路上，它们互相
+               看不到对方的数据（allocate 只扫描本分支的已有 chunk）。
+               因此 traj_id 必须全域唯一：格式 ruhsoft_<6 位序号>_<8 位随机 hex>。
+               - 6 位序号沿用现有数据的约定，从本轮 chunk 编号派生，
+                 例如分配到 chunk_0007 就写 000701、000702…（历史上
+                 chunk_0001 -> 000101、chunk_0002 -> 000201 都是这个做法）。
+               - 后 8 位必须是真正随机生成的 hex，不要用连续计数器、
+                 时间戳或任何可预测的短串——这是两轮撞号时唯一的分隔符。
+
             5. 每个 chunk 固定按这个顺序，不要跳步：
                预检（YAML 可直接读；此时还没有 salt 章，不要带 --require-salt）：
                  validate_and_integrate.py --check data/inbox/chunk_NNNN.yaml
@@ -175,13 +191,15 @@ jobs:
             6. 转换与两个 gate 都要带 --timeout；退出码 3 表示该 chunk 未通过，
                缩小 chunk 重来，不要调大超时。
 
-            7. 计时器：本轮有 3 小时墙钟预算（allocate --budget-hours 可调）。
+            7. 计时器：本轮墙钟预算 2.5 小时，必须用
+               allocate --count <N> --budget-hours 2.5 显式设定（job 在 165 分钟时
+               被强制结束，预算必须早于它，否则止损永远来不及触发）。
                命令会显示 ⚠/⛔ 计时提示：
-               - ⚠ warn（超过 75%）：把手上这份 YAML 写完，不要再开新场景。
-               - ⛔ stop（超过 3 小时）：write 会拒绝新 chunk。此时必须立即执行
+               - ⚠ warn（超过 75%，约 1h52m）：把手上这份 YAML 写完，不要再开新场景。
+               - ⛔ stop（超过 2.5 小时）：write 会拒绝新 chunk。此时必须立即执行
                  data_writer.py salvage --round <id> --taxonomy data/taxonomy.json --commit
                  把已完成且合法的部分转换、合并并提交。半成品提交算成功，
-                 跑满 3 小时却什么都没交是失败。
+                 用完预算却什么都没交是失败。
 
             8. 完成后提交，开一个 PR 标题前缀为 [traindata_add]。
                分支已经由 workflow 建好并 checkout（见环境变量 TRAINDATA_BRANCH），
