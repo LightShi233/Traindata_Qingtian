@@ -119,5 +119,6 @@
   ],
   "email_manifest_source": "work/emails_combined.json",
   "email_batch_registered_at": "2026-10-29T08:22:01+00:00",
-  "updated_at": "2026-10-29T08:22:13+00:00"
+  "updated_at": "2026-10-29T08:22:13+00:00",
+  "taxonomy_version": "ruhui-triage-v2"
 }
