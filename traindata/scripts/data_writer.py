@@ -98,7 +98,7 @@ REPO_ROOT = _find_repo_root(HERE)
 # name other than data/.
 DEFAULT_DATA = os.path.join(REPO_ROOT, "data") if REPO_ROOT else None
 
-CHUNK_RE = re.compile(r"^chunk_(\d{4,})\.(jsonl|yaml|yml)$")
+CHUNK_RE = re.compile(r"^chunk_(\d{4,})(?:_(\d{4,}))?\.(jsonl|yaml|yml)$")
 ROUND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 TEMP_RE = re.compile(r"(^\.tmp-|\.tmp$|\.bak$|\.orig$|\.rej$|~\$?$|\.swp$|\.pyc$|^\.DS_Store$|^__pycache__$)")
 ALLOWED_ROOT_FILES = {"taxonomy.json", "ruhui_soft_all.jsonl", "ruhui_soft_card.md"}
@@ -365,6 +365,14 @@ def cmd_allocate(args):
                 "baseline": baseline_chunks(data_dir),
                 "allocations": [],
             }
+        # Record which taxonomy this round was authored against. Without it a
+        # later taxonomy edit silently invalidates already-merged chunks: the
+        # case carries labels for the question set of its own version, not of
+        # whatever taxonomy.json says today.
+        tax_path = os.path.join(data_dir, "taxonomy.json")
+        if os.path.exists(tax_path):
+            with open(tax_path, encoding="utf-8-sig") as f:
+                manifest["taxonomy_version"] = json.load(f).get("version")
         if args.budget_hours is not None:
             if args.budget_hours <= 0:
                 raise SystemExit("--budget-hours 必须为正数")
@@ -415,12 +423,22 @@ def cmd_allocate(args):
         used = chunk_numbers(os.path.join(data_dir, "chunks"))
         used |= chunk_numbers(os.path.join(data_dir, "inbox"))
         used |= all_allocated_numbers(data_dir)
+        # Concurrency: two cron rounds branch off the same main and cannot see
+        # each other's chunks, so a purely local max() hands out the same name
+        # twice. The run id is unique per workflow run across all branches, so
+        # it becomes the suffix and collisions stop mattering.
+        suffix = args.suffix or os.environ.get("GITHUB_RUN_ID") or ""
+        if suffix and not re.fullmatch(r"\d{4,}", suffix):
+            raise SystemExit(f"--suffix / GITHUB_RUN_ID 必须是 4 位以上数字，实际 {suffix!r}")
         start = (max(used) + 1) if used else 1
         allocated = []
         for offset in range(args.count):
-            name = f"chunk_{start + offset:04d}"
+            base = f"chunk_{start + offset:04d}"
+            name = f"{base}_{suffix}" if suffix else base
             allocation = {
                 "name": name,
+                "base": base,
+                "run_suffix": suffix or None,
                 "yaml": f"inbox/{name}.yaml",
                 "jsonl": f"chunks/{name}.jsonl",
                 "status": "pending",
@@ -429,6 +447,8 @@ def cmd_allocate(args):
             }
             manifest["allocations"].append(allocation)
             allocated.append(allocation)
+        if suffix:
+            manifest["run_suffix"] = suffix
         manifest["updated_at"] = _now()
         save_round(data_dir, manifest)
 
@@ -553,6 +573,10 @@ def cmd_write(args):
         raise SystemExit(f"taxonomy 不存在: {taxonomy}（用 --taxonomy 指定）")
     with open(taxonomy, encoding="utf-8-sig") as f:
         taxonomy_obj = json.load(f)
+    mismatched = taxonomy_drift(manifest, taxonomy_obj, args.round)
+    if mismatched:
+        print(mismatched, file=sys.stderr)
+        return 1
 
     deadline = Deadline(args.timeout)
     try:
@@ -808,6 +832,24 @@ def _commit_salvage(data_dir, round_id, names):
 # --------------------------------------------------------------------------- #
 # merge
 # --------------------------------------------------------------------------- #
+def taxonomy_drift(manifest, taxonomy_obj, round_id):
+    """Refuse to mix question sets across taxonomy versions.
+
+    A case carries labels for the questions that existed when it was authored.
+    If taxonomy.json gained a question since, validating old cases against it
+    fails on every case with "missing label" — which reads like corrupted data
+    but is really a version mismatch. Say so plainly instead.
+    """
+    recorded = manifest.get("taxonomy_version")
+    current = taxonomy_obj.get("version")
+    if not recorded or recorded == current:
+        return ""
+    return (f"round {round_id} 是按 {recorded} 生成的，当前 taxonomy.json 是 {current}。\n"
+            f"  两者的题目集不同（当前: {sorted(taxonomy_obj.get('questions', {}))}），"
+            "混用会让所有旧 case 报'缺少标签'。\n"
+            "  请用生成该 round 的 taxonomy 重跑，或新开一个 round 用当前版本。")
+
+
 def cmd_merge(args):
     data_dir = os.path.abspath(args.data_dir)
     manifest = load_round(data_dir, args.round)
@@ -832,6 +874,10 @@ def cmd_merge(args):
         raise SystemExit(f"taxonomy 不存在: {taxonomy}")
     with open(taxonomy, encoding="utf-8-sig") as f:
         taxonomy_obj = json.load(f)
+    mismatched = taxonomy_drift(manifest, taxonomy_obj, args.round)
+    if mismatched:
+        print(mismatched, file=sys.stderr)
+        return 1
 
     deadline = Deadline(args.timeout)
     check_args = argparse.Namespace(
@@ -1161,6 +1207,10 @@ def main():
                                "超过即进入强制止损，write 拒绝新 chunk")
     allocate.add_argument("--warn-fraction", type=float, default=None,
                           help=f"收尾提示在预算的这个比例处触发（默认 {DEFAULT_WARN_FRACTION:g}）")
+    allocate.add_argument("--suffix", default=None,
+                          help="chunk 名后缀，4 位以上数字。默认取 GITHUB_RUN_ID。"
+                               "并发 CI 轮次各自分支看不到对方的 chunk，顺序编号必撞，"
+                               "用 per-run 后缀让名字全局唯一")
     allocate.set_defaults(func=cmd_allocate)
 
     write = sub.add_parser("write", help="把分配槽位里的 YAML 校验并写成 chunk JSONL")
