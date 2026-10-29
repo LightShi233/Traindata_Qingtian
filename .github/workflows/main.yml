@@ -153,7 +153,7 @@ jobs:
                手工挑域名会绕过分层加权与 cross-map，让域名变成标签信号。
                write 会拒绝：未登记批次，或样本里出现批次外地址。
 
-            3. 只把纯 YAML 写到 allocate 打印的 data/inbox/chunk_NNNN.yaml
+            3. 只把纯 YAML 写到 allocate 打印的 data/inbox/<NAME>.yaml
                （action 写成映射、长文本用 | 块标量），然后由主代理执行 write 转换。
                严禁手写、手改或另存 jsonl。已提交的 chunk 是只读的，不能再改；
                修正只针对本轮未提交的 chunk：discard 退回 pending 后同名重写。
@@ -164,23 +164,24 @@ jobs:
             4. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
                严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
 
-            4.1 cron 每 3 小时会起一轮，所以可能同时有多个 PR 在路上，它们互相
-               看不到对方的数据（allocate 只扫描本分支的已有 chunk）。
-               因此 traj_id 必须全域唯一：格式 ruhsoft_<6 位序号>_<8 位随机 hex>。
-               - 6 位序号沿用现有数据的约定，从本轮 chunk 编号派生，
-                 例如分配到 chunk_0007 就写 000701、000702…（历史上
-                 chunk_0001 -> 000101、chunk_0002 -> 000201 都是这个做法）。
-               - 后 8 位必须是真正随机生成的 hex，不要用连续计数器、
-                 时间戳或任何可预测的短串——这是两轮撞号时唯一的分隔符。
+            4.1 cron 每 3 小时会起一轮，所以同时可能有多个 PR 在路上，它们互相
+               看不到对方的数据（allocate 只扫描本分支已有的 chunk）。
+               为此 chunk 名自动带本轮 CI run 号后缀：chunk_0007_40840653996。
+               不同 run 的编号从同一个起点开始也不会撞，你无需处理。
+               traj_id 仍须全域唯一：格式 ruhsoft_<6 位序号>_<8 位随机 hex>。
+               - 6 位序号从本轮 chunk 编号派生，例如 chunk_0007_xxx 就写
+                 000701、000702…（历史 chunk_0001 -> 000101 就是这个做法）。
+               - 后 8 位必须是真正随机的 hex，不要用连续计数器、时间戳或
+                 任何可预测的短串——这是两轮撞号时唯一的分隔符。
 
             5. 每个 chunk 固定按这个顺序，不要跳步：
                预检（YAML 可直接读；此时还没有 salt 章，不要带 --require-salt）：
-                 validate_and_integrate.py --check data/inbox/chunk_NNNN.yaml
+                 validate_and_integrate.py --check data/inbox/<NAME>.yaml
                    --taxonomy data/taxonomy.json --expand --require-complete-cases --timeout 300
-                 audit_diversity.py --chunks data/inbox/chunk_NNNN.yaml
+                 audit_diversity.py --chunks data/inbox/<NAME>.yaml
                    --taxonomy data/taxonomy.json --require-injection --strict
                    --require-taxonomy-axes --email-manifest work/emails.json --timeout 300
-               通过后 write，再对 data/chunks/chunk_NNNN.jsonl 重跑同样两条命令，
+               通过后 write，再对 data/chunks/<NAME>.jsonl 重跑同样两条命令，
                audit 这次加 --require-salt；最后运行 salt.py --check 该 chunk。
                跨 chunk 去重：把其它轮已验收的 data/rounds/<round>/soft_*.jsonl
                用 --leak 传给 validator；--auto-leak 只搜输入旁边，搜不到 rounds/。

@@ -185,9 +185,15 @@ What the tool enforces:
   project root itself or anything outside it. Everything the round writes
   (inbox, chunks, rounds) stays under that root, so a corpus is always
   discoverable. Run `data_writer.py list-dirs` to see existing roots.
-- **Names are allocated, not guessed.** `chunk_<4+ digits>`; `write` requires
-  the YAML to be at the exact slot from `allocate` and refuses unallocated
-  names.
+- **Names are allocated, not guessed.** `chunk_<4+ digits>[_<run id>]`; `write`
+  requires the YAML to be at the exact slot from `allocate` and refuses
+  unallocated names.
+- **Concurrent rounds cannot collide.** Two scheduled runs branch off the same
+  `main` and cannot see each other's chunks, so a sequential number alone would
+  hand the same name to both. `allocate` appends the workflow run id
+  (`chunk_0007_40840653996`, from `GITHUB_RUN_ID`, overridable with
+  `--suffix`), which is unique across branches. Locally there is no run id and
+  the plain `chunk_0007` form is used.
 - **No overwrites; one recovery path.** An existing `chunks/chunk_NNNN.jsonl` is
   never replaced. If the chunk failed a gate, run `discard` (it keeps the YAML
   and returns the slot to `pending`), fix the YAML, and `write` the same name.
