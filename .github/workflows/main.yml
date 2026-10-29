@@ -9,13 +9,8 @@ on:
         default: ''
         type: string
   schedule:
-    # 每 3 小时一次。GitHub cron 走 UTC，且高峰时段可能延迟几分钟到十几分钟；
-    # 不追求精确对齐，只要两轮之间留足间隔。用 :17 而不是整点，整点最拥堵。
-    - cron: '17 */3 * * *'
+    - cron: '*/40 * * * *'
 
-# id-token: write 是 Qoder Action 的硬要求：它用 OIDC 把
-# (GitHub OIDC token + QODER_PERSONAL_ACCESS_TOKEN) 换成 qoderai App 的
-# installation token，再拿它配 git remote。少了这一项，action 第一步就退出。
 permissions:
   contents: write
   pull-requests: write
@@ -29,10 +24,7 @@ concurrency:
 jobs:
   traindata-gen:
     runs-on: ubuntu-latest
-    # 必须小于 cron 周期（180 分钟），否则跑满时会与下一轮重叠、队列持续积压。
-    # 留 15 分钟给 checkout / gate / PR；模型侧预算设为 2.5 小时，早于这个硬超时，
-    # 这样 salvage 止损来得及在 job 被强杀之前把成品提交出去。
-    timeout-minutes: 165
+    timeout-minutes: 35
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -50,51 +42,6 @@ jobs:
           git --version
           python3 --version
 
-      # Qoder Action 的 run 步骤展开为：
-      #   qodercli -w $GITHUB_WORKSPACE -p "$PROMPT" <flags 逐行拆成 argv> -f stream-json
-      # 三个要点：
-      #
-      # 1) 认证只走 PAT。action 先把 QODER_PERSONAL_ACCESS_TOKEN 放进环境变量
-      #    （CLI 见到它就自动用 PAT 认证），再用 OIDC 换 qoderai App 的
-      #    installation token 配 git remote。所以这里不需要任何 provider /
-      #    api key 输入，
-      #    settings 里也不写 security.auth —— 本机 ~/.qoder/settings.json 里的
-      #    "selectedType": "qoder-browser" 是浏览器登录，runner 上没有浏览器，
-      #    带过来只会让 CLI 去拉授权页。
-      #
-      # 2) 模型配置沿用本机 settings，落在 .github/qoder-settings.json，用
-      #    --settings 指过去：model.name = dfmodel（实际解析成 DeepSeek-Flash），
-      #    各模型 contextWindow = 1000000，ultimate 的 reasoning.effort = low。
-      #    --settings 是优先级最高的一层，且是深合并（只覆盖写到的字段），
-      #    所以文件里只放要覆盖的部分。为什么不用项目级 .qoder/settings.json：
-      #    那份会被本机 CLI 自动加载，等于把 CI 的模型配置强加给本地开发。
-      #
-      # 3) --dangerously-skip-permissions 等价于旧的 `qwen --yolo`：工具调用
-      #    （shell / write / edit）全部自动批准，两个 gate 脚本才能真正跑起来。
-      #    不要设 tools.core —— 它是 allowlist，会把 python3 挡掉，导致
-      #    data_writer.py / validate_and_integrate.py / audit_diversity.py 全部无法执行。
-      #
-      # 日志（实测，别照着 action 的 README 想当然）：wrapper 的实时打印条件是
-      # `type == "assistant" && subtype == "message"` 且内容块 `type == "function"`，
-      # 而 1.1.80 发的是 `{"type":"assistant","message":{...}}`（无顶层 subtype），
-      # 内容块是 thinking / tool_use / text。两个条件都不成立，所以跑的过程中
-      # 只会看到 "Arguments for qodercli"、Session ID、结束时的成功/失败行，
-      # 中间过程不会实时出现 —— 这是版本错配（wrapper 按 0.1.18 的形状写的），
-      # 不是配置问题。降回 0.1.18 也解决不了：那一版没有 --settings 和
-      # --context-window，模型配置就带不过去了。
-      # 因此下面的 Summarize 步骤在跑完后自己解一遍 transcript，把工具调用、
-      # 助手消息和最终 result 打进 job 日志；完整记录另外存 artifact。
-      #
-      # 开跑时那句 "2 errors loading agent configs" 也已定位，不是本仓库配置问题：
-      # action 自带的 .qoder/agents/{code-analyzer,test-analyzer}.md 的 frontmatter
-      # 首行写成了 "--- "（多一个空格），1.1.80 严格匹配 "---" 就拒绝，0.1.18 容忍。
-      # 这两个 agent 只给 /review-pr、/assistant 用，本流程不调用，属无害噪音；
-      # 不去 hack action 的复制流程（它每次都会 rsync 覆盖回去）。
-      #
-      # qodercli_version 钉在 1.1.80（npm latest，与本机一致）：action 自带的
-      # 默认 0.1.18 太旧，--settings / --context-window 在那一版上根本不存在
-      # （已用 0.1.18 实测确认）。升级前先在本地跑一次
-      # `qodercli -p hi -f stream-json`，确认上面的日志前提仍然成立。
       - name: Run Qoder CLI (PAT auth, local model settings)
         id: qoder
         uses: QoderAI/qoder-action@v0
@@ -164,7 +111,7 @@ jobs:
             4. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
                严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
 
-            4.1 cron 每 3 小时会起一轮，所以同时可能有多个 PR 在路上，它们互相
+            4.1 cron 每 40 分钟会起一轮，所以同时可能有多个 PR 在路上，它们互相
                看不到对方的数据（allocate 只扫描本分支已有的 chunk）。
                为此 chunk 名自动带本轮 CI run 号后缀：chunk_0007_40840653996。
                不同 run 的编号从同一个起点开始也不会撞，你无需处理。
@@ -192,12 +139,12 @@ jobs:
             6. 转换与两个 gate 都要带 --timeout；退出码 3 表示该 chunk 未通过，
                缩小 chunk 重来，不要调大超时。
 
-            7. 计时器：本轮墙钟预算 2.5 小时，必须用
-               allocate --count <N> --budget-hours 2.5 显式设定（job 在 165 分钟时
+            7. 计时器：本轮墙钟预算 30 分钟，必须用
+               allocate --count <N> --budget-hours 0.5 显式设定（job 在 35 分钟时
                被强制结束，预算必须早于它，否则止损永远来不及触发）。
                命令会显示 ⚠/⛔ 计时提示：
-               - ⚠ warn（超过 75%，约 1h52m）：把手上这份 YAML 写完，不要再开新场景。
-               - ⛔ stop（超过 2.5 小时）：write 会拒绝新 chunk。此时必须立即执行
+               - ⚠ warn（超过 75%，约 22 分钟）：把手上这份 YAML 写完，不要再开新场景。
+               - ⛔ stop（超过 30 分钟）：write 会拒绝新 chunk。此时必须立即执行
                  data_writer.py salvage --round <id> --taxonomy data/taxonomy.json --commit
                  把已完成且合法的部分转换、合并并提交。半成品提交算成功，
                  用完预算却什么都没交是失败。
@@ -221,9 +168,6 @@ jobs:
 
             ${{ inputs.prompt_extra }}
 
-      # action 的实时打印在 1.1.80 上是废的（见上方日志说明），所以这里自己解一遍
-      # transcript：工具调用、最后几条助手消息、最终 result。日志里至少能看出
-      # 这 3 小时干了什么、卡在哪一步。
       - name: Summarize Qoder CLI transcript
         if: always() && steps.qoder.outputs.output_file != ''
         env:
@@ -275,7 +219,6 @@ jobs:
                   print("::endgroup::")
           PY
 
-      # 完整 stream-json 记录留档，复盘用。
       - name: Upload Qoder CLI transcript
         if: always() && steps.qoder.outputs.output_file != ''
         uses: actions/upload-artifact@v4
@@ -285,7 +228,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # 失败时把 qodercli 的 stderr 和记录尾巴直接打到本页，省一次下载 artifact 的动作。
       - name: Show Qoder CLI log tail on failure
         if: failure()
         env:
@@ -304,10 +246,6 @@ jobs:
             echo "::: end transcript :::"
           fi
 
-      # 模型自述的退出码不算数：开 PR 前 workflow 自己用同一套脚本复核本分支
-      # 新增的 chunk。校验失败就不写 work/gates_ok，兜底 PR 步骤会因此跳过。
-      # 这一层同时守着 skill 的硬规则：只动 ./data、不改 taxonomy、不删文件、
-      # 每个 chunk 都带宿主 salt 章。
       - name: Verify generated chunks with the skill gates
         if: ${{ !cancelled() }}
         run: |
@@ -360,8 +298,6 @@ jobs:
             exit 1
           fi
 
-          # 从 round manifest 重建邮箱白名单，不依赖 work/ 里的临时文件。
-          # email_pairs 也一并恢复，否则 audit 会跳过 cross-map 检查。
           python3 - <<'PY'
           import glob, json
           emails, pairs, pair_keys = [], [], set()
@@ -413,8 +349,6 @@ jobs:
           touch work/gates_ok
           echo "所有 gate 通过；允许创建兜底 PR"
 
-      # 兜底：模型没按第 8 条开 PR 时，把它在分支上的提交补成一个 PR，
-      # 避免"跑了 3 小时、数据在分支上、却看不到 PR"。
       - name: Ensure pull request exists
         if: ${{ !cancelled() }}
         env:
@@ -437,7 +371,7 @@ jobs:
           fi
           OPEN=$(gh pr list --head "$BRANCH" --state open --json number --jq 'length' 2>/dev/null || echo 0)
           case "$OPEN" in
-            ''|*[!0-9]*) OPEN=0 ;;   # gh 报错或输出异常时按"没有 PR"处理
+            ''|*[!0-9]*) OPEN=0 ;;
           esac
           if [ "$OPEN" -gt 0 ]; then
             echo "PR 已存在（$OPEN 个），跳过"; exit 0
