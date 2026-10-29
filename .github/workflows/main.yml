@@ -9,22 +9,25 @@ on:
         default: ''
         type: string
   schedule:
-    - cron: '*/40 * * * *'
+    - cron: '*/40 * * * *' # 极限压榨：每 40 分钟一趟
 
+# 必须要有这些权限，否则第八条的 gh pr create 会报错
 permissions:
   contents: write
   pull-requests: write
   issues: write
   id-token: write
 
+# 强行抢跑，如果上一轮卡住，直接把上一轮踢掉
 concurrency:
   group: traindata-gen-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true 
 
 jobs:
   traindata-gen:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # 留足 5 分钟给最后的 salvage 和 git push
+    timeout-minutes: 45 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
