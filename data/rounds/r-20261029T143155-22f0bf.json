@@ -1,0 +1,72 @@
+{
+  "round": "r-20261029T143155-22f0bf",
+  "created_at": "2026-10-29T14:31:55+00:00",
+  "baseline": [
+    "chunks/chunk_0001.jsonl",
+    "chunks/chunk_0002.jsonl",
+    "chunks/chunk_0004.jsonl",
+    "chunks/chunk_0005.jsonl",
+    "chunks/chunk_0006.jsonl",
+    "chunks/chunk_0007.jsonl",
+    "chunks/chunk_0008.jsonl",
+    "chunks/chunk_0009_40877273830.jsonl",
+    "chunks/chunk_0011_40884889843.jsonl",
+    "inbox/chunk_0001.yaml",
+    "inbox/chunk_0002.yaml",
+    "inbox/chunk_0004.yaml",
+    "inbox/chunk_0005.yaml",
+    "inbox/chunk_0006.yaml",
+    "inbox/chunk_0007.yaml",
+    "inbox/chunk_0008.yaml",
+    "inbox/chunk_0009_40877273830.yaml",
+    "inbox/chunk_0011_40884889843.yaml"
+  ],
+  "allocations": [
+    {
+      "name": "chunk_0012_40891905371",
+      "base": "chunk_0012",
+      "run_suffix": "40891905371",
+      "yaml": "inbox/chunk_0012_40891905371.yaml",
+      "jsonl": "chunks/chunk_0012_40891905371.jsonl",
+      "status": "written",
+      "worker": null,
+      "allocated_at": "2026-10-29T14:31:55+00:00",
+      "written_at": "2026-10-29T14:36:08+00:00",
+      "sha256": "69aecbe0dc94e78347bcd8edbdf9348a99dd81e82d94fa840f77b1671e463749",
+      "cases": 10
+    }
+  ],
+  "taxonomy_version": "ruhui-triage-v3",
+  "budget_hours": 0.5,
+  "salted_prompt": "work/salted_prompt.txt",
+  "salted_prompt_sha256": "843045015d782c3e87765964c0bebbafd8cfcc58d754891730480238a2e51209",
+  "salted_prompt_registered_at": "2026-10-29T14:35:38+00:00",
+  "email_batch": [
+    "zongmiao.s@vineyardfen.com",
+    "secondary@vineyardfen.com",
+    "timmekanikolaienko@kimo.com",
+    "l_wallwork@kimo.com"
+  ],
+  "email_pairs": [
+    {
+      "domain": "vineyardfen.com",
+      "tier": "synth",
+      "addresses": [
+        "zongmiao.s@vineyardfen.com",
+        "secondary@vineyardfen.com"
+      ]
+    },
+    {
+      "domain": "kimo.com",
+      "tier": "freemail",
+      "addresses": [
+        "timmekanikolaienko@kimo.com",
+        "l_wallwork@kimo.com"
+      ]
+    }
+  ],
+  "email_manifest_source": "work/emails.json",
+  "email_batch_registered_at": "2026-10-29T14:35:38+00:00",
+  "run_suffix": "40891905371",
+  "updated_at": "2026-10-29T14:36:08+00:00"
+}
