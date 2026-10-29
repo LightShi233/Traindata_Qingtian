@@ -400,8 +400,14 @@ def check_distribution(parsed, audit, args, key, label, max_share, min_distinct=
         return c, n
     top, count = c.most_common(1)[0]
     if count / n > max_share:
+        cap = int(math.floor(max_share * n + 1e-9))
+        if cap == 0:
+            hint = (f"；n={n} 时该轴在 {max_share:.0%} 阈值下无解，"
+                    f"至少需要 {math.ceil(1 / max_share)} 个样本且每个值只出现一次")
+        else:
+            hint = f"；同一个值最多只能出现 {cap} 次（当前 {count} 次）"
         audit.fail(key, f"{label} 过度集中: '{top}' 占 {count}/{n} ({count/n:.0%}) > {max_share:.0%}；"
-                        "这会让模型把这个表面特征当成答案")
+                        "这会让模型把这个表面特征当成答案" + hint)
     if min_distinct is not None and len(c) < min_distinct:
         audit.fail(key, f"{label} 只有 {len(c)} 种，至少需要 {min_distinct} 种")
     return c, n
@@ -728,7 +734,10 @@ def check_action_attribution(parsed, audit, args):
                     audit.fail(
                         "action",
                         f"{where}: safe=true 但用了已知一次性域名，却没有任何中立化说明。"
-                        f"请在 thought 里加一句：\"{NEUTRALIZE_SENTENCE}\" "
+                        f"thought 必须同时包含 (temporary|temp|disposable|throwaway)"
+                        f"+(mail|mailbox) 和一个范围词 (within scope / not a violation / "
+                        f"compliant / business action)。最稳的是原样抄："
+                        f"\"{NEUTRALIZE_SENTENCE}\" "
                         f"（中文亦可：客户使用了临时邮箱，需注意但业务动作合规）")
                 else:
                     neutralized += 1
