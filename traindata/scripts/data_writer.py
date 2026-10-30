@@ -990,7 +990,10 @@ def _scan_files(data_dir):
     for root, dirs, files in os.walk(data_dir):
         if "__pycache__" in dirs:
             found.append(os.path.join(root, "__pycache__"))
-        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        # .git belongs to the corpus repository itself (the private-repo layout),
+        # not to the corpus. Walking into it reported every object file as a
+        # stray and failed check --strict on a perfectly valid checkout.
+        dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git")]
         for name in files:
             found.append(os.path.join(root, name))
     return found
