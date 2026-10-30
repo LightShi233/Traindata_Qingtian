@@ -57,8 +57,20 @@ GitHub Secrets，等于让每次 `workflow_dispatch`、每条 PR 的 runner 都�
 | 名字 | 值 |
 | - | - |
 | `TRAINDATA_DATA_SSH_KEY` | `~/.ssh/traindata_ci` 的**私钥全文**（含 `-----BEGIN OPENSSH PRIVATE KEY-----` 头尾） |
+| `QODER_PERSONAL_ACCESS_TOKEN` | Qoder 的个人访问令牌。action 用它换 qoderai App 的 installation token，没有替代路径，缺了第一步就失败 |
 
-只此两条。
+两条 secret + 一条 variable 就是全部。
+
+可选变量：`QODER_CLI_VERSION`（默认 `1.1.80`），只在要换 qodercli 版本时设置。
+
+不需要的东西，确认一下不要多配：
+
+- **不需要 `GITHUB_TOKEN` 相关权限**：workflow 只声明 `contents: read`（给
+  checkout 用）和 `id-token: write`（给 Qoder action 换 token 用），
+  没有任何 PR / commit / issues 写权限
+- **不需要 Python 安装步骤**：`ubuntu-latest` 自带 python3 ≥ 3.9，脚本只用标准库
+- **不需要配置模型**：`.github/qoder-settings.json` 已在仓库里，通过 `--settings` 传入
+- **不要把公钥存成 secret**：它只该出现在 GitCode 的部署公钥列表里
 
 关于公钥：`.pub` 文件**不放进 GitHub**，但这不是因为"可以公开"，而是因为
 它的去向只有一个——GitCode 仓库端的部署公钥列表。它是服务器用来验证你私钥
@@ -75,6 +87,25 @@ ssh -i ~/.ssh/traindata_ci -o IdentitiesOnly=yes -T git@gitcode.com
 git -c core.sshCommand='ssh -i ~/.ssh/traindata_ci -o IdentitiesOnly=yes' \
   ls-remote git@gitcode.com:Light233/data.git
 ```
+
+## 首次运行前核对
+
+按顺序确认，任何一条不满足都会让 job 在第一步之外失败：
+
+| # | 检查 | 命令 / 位置 |
+| - | - | - |
+| 1 | 私库有提交且默认分支是 `main` | `git ls-remote --symref git@gitcode.com:Light233/data.git HEAD` |
+| 2 | 部署公钥已加到**私库**且勾了可写 | 私库 → 设置 → 部署公钥 |
+| 3 | 公开仓库有 `TRAINDATA_DATA_REPO` 变量 | Settings → Variables |
+| 4 | 公开仓库有 `TRAINDATA_DATA_SSH_KEY` 和 `QODER_PERSONAL_ACCESS_TOKEN` 两个 secret | Settings → Secrets |
+| 5 | 公开仓库允许运行 Actions | Settings → Actions → General |
+| 6 | 本地不再占用 `./data` | `ls data/` 应只有 `taxonomy.json` 或为空 |
+
+第 1 条特别容易漏：空仓库 `git clone` 会成功但给出警告，随后
+`git switch -c` 和 `git push` 都会失败。私库必须先有 `main` 上的一个提交。
+
+第 6 条是我踩过的坑：本地 `./data` 留着 130 个未跟踪文件时，
+CI 的 `rm -rf data && git clone` 虽然能跑，但本地开发会误以为数据还在公开仓库。
 
 ## 每一轮 CI 做什么
 
