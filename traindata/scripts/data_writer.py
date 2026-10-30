@@ -473,6 +473,15 @@ def cmd_allocate(args):
         for offset in range(args.count):
             base = f"chunk_{start + offset:04d}"
             name = f"{base}_{suffix}" if suffix else base
+            # --worker may name several subagents; hand each slot to one, in
+            # order, so the printed table is an unambiguous assignment. Without
+            # that, two subagents can both "write their chunk" and the later
+            # YAML silently overwrites the earlier one before anyone validates.
+            worker = None
+            if args.workers:
+                worker = args.workers[offset] if offset < len(args.workers) else args.workers[-1]
+            elif args.worker:
+                worker = args.worker
             allocation = {
                 "name": name,
                 "base": base,
@@ -480,7 +489,7 @@ def cmd_allocate(args):
                 "yaml": f"inbox/{name}.yaml",
                 "jsonl": f"chunks/{name}.jsonl",
                 "status": "pending",
-                "worker": args.worker,
+                "worker": worker,
                 "allocated_at": _now(),
             }
             manifest["allocations"].append(allocation)
@@ -500,9 +509,19 @@ def cmd_allocate(args):
     clock = round_clock(manifest)
     print(f"budget: {_fmt_duration(clock['budget_s'])} "
           f"(收尾提示在 {_fmt_duration(clock['warn_at_s'])})")
-    for allocation in allocated:
-        print(f"  {allocation['name']}  yaml={_display(_abs(data_dir, allocation['yaml']))}"
-              f"  jsonl={_display(_abs(data_dir, allocation['jsonl']))}")
+    if args.workers or args.worker:
+        print("分派表（把每一行原样交给对应子代理，子代理只能写自己那一行）：")
+        print(f"  {'chunk 名':<28} {'子代理':<14} YAML 槽位")
+        for allocation in allocated:
+            print(f"  {allocation['name']:<28} {str(allocation.get('worker') or '-'):<14} "
+                  f"{_display(_abs(data_dir, allocation['yaml']))}")
+        print("  子代理必须逐字复制上面的 chunk 名与路径：名字带了 CI run 号后缀"
+              "（chunk_NNNN_<run id>），抄错一位就会写进别人的槽位，"
+              "后写的会静默覆盖先写的。")
+    else:
+        for allocation in allocated:
+            print(f"  {allocation['name']}  yaml={_display(_abs(data_dir, allocation['yaml']))}"
+                  f"  jsonl={_display(_abs(data_dir, allocation['jsonl']))}")
     print("只允许把 YAML 写到上面的 yaml 路径；不要新建脚本或其它文件。")
     print("注意: --count 是 chunk 槽位数，不是 case 数；一个 chunk 的全部 case "
           "写进同一个 YAML。只跑一个 pilot chunk 时用 --count 1，"
@@ -591,6 +610,11 @@ def cmd_write(args):
     if allocation is None:
         raise SystemExit(f"{args.name} 不属于 round {args.round}；"
                          "禁止使用未分配的名字，先运行 allocate")
+    owner = allocation.get("claimed_by")
+    if owner and args.worker and owner != args.worker:
+        raise SystemExit(f"{args.name} 由子代理 {owner!r} 认领，但当前 --worker 是 "
+                         f"{args.worker!r}。不同子代理的产出不能互相顶替，"
+                         "请确认写的是自己认领的那个槽位")
 
     expected_yaml = require_under(_abs(data_dir, allocation["yaml"]), data_dir, "YAML 输入")
     expected_jsonl = require_under(_abs(data_dir, allocation["jsonl"]), data_dir, "JSONL 输出")
@@ -987,6 +1011,12 @@ BRIEF = """\
        一个 chunk 的全部 case 写进同一个 YAML；多分配的槽位保持 pending、不会被 merge。
        并行时用 --count <子代理数>，最多 8：每轮（round）的槽位总数硬上限 8，
        因为每个 chunk 都要由主代理 write 并跑两个 gate，再多就验证不过来。
+  1a. 并行时加 --workers a b c：输出会打印「chunk 名 → 子代理」分派表。
+       子代理必须逐字复制自己那一行的名字（名字带 run 号后缀，如
+       chunk_0007_40840653996），并在动笔前认领：
+         claim --round <id> --name <名字> --worker <自己>
+       同一槽位被第二个子代理认领会拒绝；不做认领，后写的 YAML 会静默
+       覆盖先写的，一份产出无声消失。
   2. 写 YAML（一个 chunk 一个文件，不要写 jsonl、不要写别的路径）
   3. 先过一遍网关（YAML 可直接被读取；预检不要带 --require-salt，salt 章还没盖）：
        validate_and_integrate.py --check <yaml> --taxonomy data/taxonomy.json
@@ -1064,6 +1094,39 @@ YAML case 的最小形状（每个 case 一个映射）：
 
 def cmd_brief(args):
     print(BRIEF)
+    return 0
+
+
+def cmd_claim(args):
+    """Reserve a chunk slot for one subagent before it writes the YAML.
+
+    Two subagents handed overlapping names would otherwise both write "their"
+    file: the second silently replaces the first, and by the time the main agent
+    validates, one author's work is gone with no error anywhere. Claiming is the
+    only guard that runs *before* the overwrite, because it happens before the
+    file exists.
+    """
+    data_dir = os.path.abspath(args.data_dir)
+    manifest = load_round(data_dir, args.round)
+    if manifest is None:
+        raise SystemExit(f"没有这个 round: {args.round}")
+    with _lock(data_dir):
+        manifest = load_round(data_dir, args.round)
+        allocation = next((a for a in manifest["allocations"] if a["name"] == args.name), None)
+        if allocation is None:
+            raise SystemExit(f"{args.name} 不在 round {args.round} 的清单里；"
+                             "只能认领 allocate 打印过的名字（逐字复制，含 run 号后缀）")
+        owner = allocation.get("claimed_by")
+        if owner and owner != args.worker:
+            raise SystemExit(f"{args.name} 已被子代理 {owner!r} 认领，不能再给 {args.worker!r}。"
+                             "两个子代理写同一个槽位会互相覆盖，其中一份产出会静默丢失")
+        allocation["claimed_by"] = args.worker
+        allocation["claimed_at"] = _now()
+        manifest["updated_at"] = _now()
+        save_round(data_dir, manifest)
+    print(f"claimed {args.name} -> {args.worker}")
+    print(f"  只写这一个文件: {_display(_abs(data_dir, allocation['yaml']))}")
+    print(f"  写完后由主代理执行 write --round {args.round} --name {args.name}")
     return 0
 
 
@@ -1240,6 +1303,9 @@ def main():
                                "case 写进同一个 YAML；只跑一个 pilot chunk 时用 --count 1")
     allocate.add_argument("--round", default=None, help="沿用已有 round id（追加分配）")
     allocate.add_argument("--worker", default=None, help="subagent 标签，便于追溯")
+    allocate.add_argument("--workers", nargs="+", default=None, metavar="NAME",
+                          help="按顺序把每个槽位分给一个子代理，例如 --workers a b c；"
+                               "--count 应等于这里的人数。输出会打印分派表")
     allocate.add_argument("--salted-prompt", default=None,
                           help="本轮实际发给模型的 salt.py 输出；只有登记了它，"
                                "write 才会为该 round 的 case 盖 meta.salted")
@@ -1262,6 +1328,8 @@ def main():
     write.add_argument("--round", required=True)
     write.add_argument("--name", required=True, help="allocate 打印的名字，如 chunk_0003")
     write.add_argument("--in", dest="infile", required=True)
+    write.add_argument("--worker", default=None,
+                       help="若该槽位已被子代理 claim，这里必须与认领者一致，否则拒绝")
     write.add_argument("--taxonomy", default=None)
     write.add_argument("--timeout", type=float, default=0.0)
     write.add_argument("--ruhui-max-len", type=int, default=1024,
@@ -1304,13 +1372,20 @@ def main():
     check.add_argument("--json", action="store_true")
     check.set_defaults(func=cmd_check)
 
+    claim = sub.add_parser(
+        "claim", help="子代理写 YAML 前先认领自己的槽位，防止两个子代理覆盖同一个文件")
+    claim.add_argument("--round", required=True)
+    claim.add_argument("--name", required=True, help="allocate 打印的名字，逐字复制")
+    claim.add_argument("--worker", required=True, help="认领它的子代理标签")
+    claim.set_defaults(func=cmd_claim)
+
     sub.add_parser("list-dirs", help="列出项目内可作为输出根目录的候选").set_defaults(
         func=cmd_list_dirs)
     sub.add_parser("brief", help="打印 agent 速查：流程、字段、常见拒绝原因").set_defaults(
         func=cmd_brief)
 
     args = parser.parse_args()
-    if args.command in ("list-dirs", "brief"):
+    if args.command in ("list-dirs", "brief", "claim"):
         return args.func(args)
     if not REPO_ROOT:
         raise SystemExit(

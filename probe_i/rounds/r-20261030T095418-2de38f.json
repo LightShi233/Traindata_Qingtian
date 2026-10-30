@@ -1,0 +1,40 @@
+{
+  "round": "r-20261030T095418-2de38f",
+  "created_at": "2026-10-30T01:54:18+00:00",
+  "baseline": [],
+  "allocations": [
+    {
+      "name": "chunk_0001_40840653996",
+      "base": "chunk_0001",
+      "run_suffix": "40840653996",
+      "yaml": "inbox/chunk_0001_40840653996.yaml",
+      "jsonl": "chunks/chunk_0001_40840653996.jsonl",
+      "status": "pending",
+      "worker": "alpha",
+      "allocated_at": "2026-10-30T01:54:18+00:00"
+    },
+    {
+      "name": "chunk_0002_40840653996",
+      "base": "chunk_0002",
+      "run_suffix": "40840653996",
+      "yaml": "inbox/chunk_0002_40840653996.yaml",
+      "jsonl": "chunks/chunk_0002_40840653996.jsonl",
+      "status": "pending",
+      "worker": "beta",
+      "allocated_at": "2026-10-30T01:54:18+00:00"
+    },
+    {
+      "name": "chunk_0003_40840653996",
+      "base": "chunk_0003",
+      "run_suffix": "40840653996",
+      "yaml": "inbox/chunk_0003_40840653996.yaml",
+      "jsonl": "chunks/chunk_0003_40840653996.jsonl",
+      "status": "pending",
+      "worker": "gamma",
+      "allocated_at": "2026-10-30T01:54:18+00:00"
+    }
+  ],
+  "taxonomy_version": "ruhui-triage-v3",
+  "run_suffix": "40840653996",
+  "updated_at": "2026-10-30T01:54:18+00:00"
+}

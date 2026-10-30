@@ -202,6 +202,15 @@ What the tool enforces:
   `scenario_family` / `entity_family` / `id_style` / `thought_style` across
   subagents up front; uncoordinated workers converge on one template and the
   audit rejects the whole round.
+- **Each subagent claims its slot before writing.** `allocate --workers a b c`
+  prints a chunk→subagent table; a worker runs `data_writer.py claim --round
+  <id> --name <exact name> --worker <self>` first. The name carries the run
+  suffix (`chunk_0007_40840653996`) and must be copied verbatim — inventing
+  `chunk_0007.yaml` or dropping the suffix lands in someone else's slot. Without
+  the claim, two workers both "write their chunk" and the later YAML replaces
+  the earlier one silently: no gate ever sees the lost work. `claim` refuses a
+  second owner, and `write --worker` refuses to accept work on a slot claimed
+  by someone else.
 - **No overwrites; one recovery path.** An existing `chunks/chunk_NNNN.jsonl` is
   never replaced. If the chunk failed a gate, run `discard` (it keeps the YAML
   and returns the slot to `pending`), fix the YAML, and `write` the same name.
