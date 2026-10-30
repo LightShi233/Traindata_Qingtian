@@ -9,7 +9,10 @@ on:
         default: ''
         type: string
   schedule:
-    - cron: '*/40 * * * *' # 极限压榨：每 40 分钟一趟
+    # 40 分钟节奏（实验得出的合适值），原写法 */40 落在 :00 和 :40，
+    # 而 :00 正是 GitHub 调度最拥堵的整点。改成 :07/:47 保持完全相同的
+    # 40/20 分钟交替节奏，只把两趟整体挪开整点与 :15/:30/:45。
+    - cron: '7,47 * * * *'
 
 # 必须要有这些权限，否则第八条的 gh pr create 会报错
 permissions:
@@ -26,8 +29,11 @@ concurrency:
 jobs:
   traindata-gen:
     runs-on: ubuntu-latest
-    # 留足 5 分钟给最后的 salvage 和 git push
-    timeout-minutes: 45 
+    # 必须小于 cron 周期（40 分钟）：在抢跑模式下，超时设得比周期大就永远不会
+    # 触发——下一轮一到就把本轮 cancel 掉，连 always() 的收尾步骤都跑不到。
+    # 38 分钟留给 stop(30min) 之后 8 分钟做 salvage/commit/push，同时保证
+    # 硬超时先于下一轮发生，job 能正常走到日志摘要与失败报告。
+    timeout-minutes: 38 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -143,8 +149,9 @@ jobs:
                缩小 chunk 重来，不要调大超时。
 
             7. 计时器：本轮墙钟预算 30 分钟，必须用
-               allocate --count <N> --budget-hours 0.5 显式设定（job 在 35 分钟时
-               被强制结束，预算必须早于它，否则止损永远来不及触发）。
+               allocate --count <N> --budget-hours 0.5 显式设定（job 在 38 分钟时
+               被强制结束，而且每 40 分钟会有下一轮启动、把本轮 cancel 掉——
+               所以 30 分钟 stop 之后必须立刻提交，拖到 38 分钟就什么都没了）。
                命令会显示 ⚠/⛔ 计时提示：
                - ⚠ warn（超过 75%，约 22 分钟）：把手上这份 YAML 写完，不要再开新场景。
                - ⛔ stop（超过 30 分钟）：write 会拒绝新 chunk。此时必须立即执行
@@ -164,9 +171,10 @@ jobs:
                不要提交 data/taxonomy.json 的改动；CI 会拒绝验收。
                如果本轮没有任何合法产出，不要开 PR，直接以失败结束并说明原因。
 
-            9. 每个 chunk 8–12 个 case（一个 case 会展开 2–4 条记录，别把记录数当
-               case 数）。并行时每个子代理只写自己的一个 chunk，仍遵守 8–12；
-               不要在一次模型调用里塞进超过 12 个 case，也不要复制场景凑数。
+            9. 每个 chunk 8–12 个 case（taxonomy 当前有 5 个问题，一个 case 会展开
+               5 条记录，别把记录数当 case 数）。并行时每个子代理只写自己的
+               一个 chunk，仍遵守 8–12；不要在一次模型调用里塞进超过 12 个
+               case，也不要复制场景凑数。
             10. 特别强调多样性原则：用脚本检查，多样性不足时强制更改，或用子代理更改
 
             ${{ inputs.prompt_extra }}
