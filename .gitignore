@@ -6,6 +6,12 @@ __pycache__/
 # salted mirror of the above (defensive-reading copy)
 /HarmBench_salted/
 
+# Generated corpora live in a private repository, not here. Only the taxonomy
+# (the question contract the tooling reads) stays public; everything the
+# generator produces — chunks, rounds, merges, splits, cards — is data.
+data/*
+!data/taxonomy.json
+
 # data-generation transients (data_writer.py check flags these too)
 data/**/.tmp-*
 data/**/*.tmp
