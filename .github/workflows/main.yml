@@ -225,9 +225,13 @@ jobs:
                  用完预算却什么都没交是失败。
 
             8. 完成后提交并推送。数据仓库在 GitCode（不是 GitHub），没有 gh CLI，
-               所以不要开 PR，直接推到你被创建的那个分支：
-                 git add -A data/ && git commit -m "data: <本轮摘要>"
+               所以不要开 PR，直接推到你被创建的那个分支。
+               注意：你的 cwd 是工具仓库根，而 ./data 本身是一个独立的 git 仓库
+               （私有语料），所以 git 命令必须先进到 data/ 里再执行：
+                 cd data && git add -A && git commit -m "data: <本轮摘要>"
                  git push -u origin "$TRAINDATA_BRANCH"
+               不要在外面（工具仓库根）执行 git add/commit/push：那里看不见
+               data/ 的内容，会报"未匹配任何文件"，而且绝不该向工具仓库提交。
                分支已经由 workflow 建好并 checkout（见环境变量 TRAINDATA_BRANCH），
                不要自己再建分支，也不要直接 push 到 main。
                提交信息里写明本轮的场景数与 chunk 数；gate 的退出码由 CI 的
