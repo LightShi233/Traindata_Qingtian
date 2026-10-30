@@ -118,7 +118,11 @@ CI 的 `rm -rf data && git clone` 虽然能跑，但本地开发会误以为数�
    checkout，含它自己的 data/taxonomy.json；公开仓库那份只是参考副本，CI 不用它）
 5. Verify 步骤：cd data，用 ../traindata/scripts/* 重跑 validator / audit /
    salt / check，全部退出码 0 才 touch work/gates_ok
-6. 有 gates_ok 才调用 `data_writer.py --data-dir data publish`：它提交语料并
+6. gate 全过后先 `prune`：删掉本轮所有非 written 的槽位（含 inbox 里没转换的
+   YAML 和清单条目）。没有这一步，`publish` 的 `git add -A` 会把从未通过 gate
+   的半成品一起提交——发生过一次：2 个 chunk 通过、2 个只写了 YAML，
+   结果 4 份 YAML 全进了私库。
+7. 有 gates_ok 才调用 `data_writer.py --data-dir data publish`：它提交语料并
    推送到私库 main。模型从不执行 git——模型会忘掉这一步，而 nested repo /
    rebase / push 竞态这些失败模式它看不见。main 前进时 publish 用 rebase
    而不是 force，语料只追加，replay 不会丢别人的数据

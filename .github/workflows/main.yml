@@ -455,6 +455,14 @@ jobs:
             python3 ../traindata/scripts/data_writer.py --data-dir . check --strict
           fi
 
+          # Everything that failed a gate — or was never converted — must not
+          # ride along into the corpus. `salvage` above gave each pending slot
+          # one chance to become a verified chunk; whatever is still pending or
+          # discarded is removed here, so "committed" means "passed the gates".
+          if [ -n "$ROUND_ID" ]; then
+            python3 ../traindata/scripts/data_writer.py --data-dir . prune --round "$ROUND_ID"
+          fi
+
           touch ../work/gates_ok
           echo "所有 gate 通过；允许推送"
 

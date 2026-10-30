@@ -818,6 +818,48 @@ def convert_pending(data_dir, manifest, taxonomy_obj, timeout=0.0, ruhui_max_len
     return converted, already, skipped
 
 
+def cmd_prune(args):
+    """Remove allotted slots that never became verified chunks.
+
+    A round can end with slots still ``pending`` or ``discarded`` while their
+    YAML sits in ``inbox/``. That YAML was never converted, so it was never
+    gated — but ``publish`` commits the whole working tree, which quietly
+    shipped those half-finished sources alongside the verified chunks. Pruning
+    is what makes "committed" mean "passed the gates": everything not
+    ``written`` is deleted from disk and from the manifest before publish runs.
+    """
+    data_dir = os.path.abspath(args.data_dir)
+    if load_round(data_dir, args.round) is None:
+        raise SystemExit(f"没有这个 round: {args.round}")
+
+    removed = []
+    with _lock(data_dir):
+        manifest = load_round(data_dir, args.round)
+        kept = []
+        for allocation in manifest["allocations"]:
+            if allocation.get("status") == "written":
+                kept.append(allocation)
+                continue
+            for rel in (allocation.get("yaml"), allocation.get("jsonl")):
+                if not rel:
+                    continue
+                path = _abs(data_dir, rel)
+                if os.path.exists(path):
+                    os.remove(path)
+                    removed.append(rel)
+            removed.append(f"{allocation['name']} (manifest entry)")
+        manifest["allocations"] = kept
+        manifest["pruned_at"] = _now()
+        manifest["updated_at"] = _now()
+        save_round(data_dir, manifest)
+
+    for item in removed:
+        print(f"  removed {item}")
+    print(f"prune round {args.round}: 保留 {len(kept)} 个已验收 chunk，"
+          f"移除 {len(removed)} 项未通过 gate 的残留")
+    return 0
+
+
 def cmd_salvage(args):
     """Convert whatever this round already produced and ship it.
 
@@ -1469,6 +1511,11 @@ def main():
     salvage.add_argument("--commit", action="store_true",
                          help="只暂存并提交本轮的 manifest/chunk/合并产物")
     salvage.set_defaults(func=cmd_salvage)
+
+    prune = sub.add_parser(
+        "prune", help="删除本轮未通过 gate 的槽位（YAML 与清单条目），保证提交的都是已验收数据")
+    prune.add_argument("--round", required=True)
+    prune.set_defaults(func=cmd_prune)
 
     check = sub.add_parser("check", help="检查多余 chunk、临时文件、自造脚本")
     check.add_argument("--round", default=None)
