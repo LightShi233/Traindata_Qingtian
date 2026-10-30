@@ -91,6 +91,19 @@ git -c core.sshCommand='ssh -i ~/.ssh/traindata_ci -o IdentitiesOnly=yes' \
    并删除 ./data 整个 clone
 ```
 
+## 日志里不出现问题
+
+CI 的 Actions 日志是公开的，语料不是。三个可能泄漏的地方都已处理：
+
+| 位置 | 风险 | 处理 |
+| - | - | - |
+| 私钥 | `echo`/`env` 误用会打印密钥 | 只 `printf` 写文件；另外对每一行 `::add-mask::`，即使将来误打印也显示 `***` |
+| gate 报错 | `audit_diversity.py` 会引用 payload 前缀帮模型定位 | CI 调用时加 `--redact`：只留文件名、规则和 `<excerpt hidden, N chars, sha256:…>`，不引用原文 |
+| Qoder transcript | 原实现把完整会话上传 artifact 并在失败时打日志，含所有 case 正文 | 只打印计数、工具名、退出状态；**artifact 上传已删除**；失败只显示 stderr 字节数和首行 |
+
+Qoder 自己跑 gate 时**不带** `--redact`，它需要看到原文才能修数据；只有 CI 复核那一步隐去。
+这意味着：同一份语料，模型看到的报错是完整的，公开日志里是脱敏的。
+
 ## 为什么不会泄漏
 
 **密钥**

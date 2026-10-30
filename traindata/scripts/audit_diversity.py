@@ -260,6 +260,20 @@ class Audit:
     def __init__(self):
         self.findings = []
         self.metrics = {}
+        # When the corpus is private but the gate runs in a public CI log, the
+        # failure text is itself a leak: quoting a payload prefix to help the
+        # generator fix it also publishes that payload. --redact keeps the
+        # location and the reason, drops the quotation.
+        self.redact = False
+
+    def excerpt(self, value, limit=50):
+        """Quote a span for a human/model, or describe it when redacting."""
+        if not isinstance(value, str):
+            return repr(value)
+        if not self.redact:
+            return repr(value[:limit])
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+        return f"<excerpt hidden, {len(value)} chars, sha256:{digest}>"
 
     def fail(self, code, msg):
         self.findings.append({"level": "FAIL", "code": code, "message": msg})
@@ -406,7 +420,7 @@ def check_distribution(parsed, audit, args, key, label, max_share, min_distinct=
                     f"至少需要 {math.ceil(1 / max_share)} 个样本且每个值只出现一次")
         else:
             hint = f"；同一个值最多只能出现 {cap} 次（当前 {count} 次）"
-        audit.fail(key, f"{label} 过度集中: '{top}' 占 {count}/{n} ({count/n:.0%}) > {max_share:.0%}；"
+        audit.fail(key, f"{label} 过度集中: {audit.excerpt(str(top))} 占 {count}/{n} ({count/n:.0%}) > {max_share:.0%}；"
                         "这会让模型把这个表面特征当成答案" + hint)
     if min_distinct is not None and len(c) < min_distinct:
         audit.fail(key, f"{label} 只有 {len(c)} 种，至少需要 {min_distinct} 种")
@@ -430,7 +444,7 @@ def check_diversity(parsed, audit, args):
         text = re.sub(r"[^a-z0-9]", "", json.dumps(c["turns"], ensure_ascii=False).lower())
         tokens = [t for t in re.split(r"[^a-z0-9]+", fam.lower()) if len(t) > 2]
         if tokens and not all(t in text for t in tokens):
-            audit.fail("entity", f"{where}: entity_family={fam!r} 在 text 中找不到；meta 不能只是填表")
+            audit.fail("entity", f"{where}: entity_family={audit.excerpt(fam)} 在 text 中找不到；meta 不能只是填表")
 
     inj = [(w, c, m) for w, c, m in parsed if m.get("injection_present") is True]
     if inj:
@@ -535,7 +549,7 @@ def check_payloads(parsed, audit, args):
                 audit.fail("payload-dup", f"{wi} 与 {wj} 的 payload 近似重复 (3-gram jaccard={jac:.2f} > {args.max_payload_dup})")
     for k, v in openers.items():
         if v > args.max_payload_opener:
-            audit.fail("payload-opener", f"有 {v} 个 payload 以 {k!r} 开头；固定开场白是指纹")
+            audit.fail("payload-opener", f"有 {v} 个 payload 以 {audit.excerpt(k)} 开头；固定开场白是指纹")
 
     # 2) templates and giveaways
     pattern_hits = Counter()
@@ -794,7 +808,7 @@ def check_benign_directives(parsed, audit):
             continue
         if c.get("safe") is not True:
             audit.fail("benign", f"{where}: 违规样本声明了 benign_directive_span "
-                                  f"{span[:50]!r}；注入场景里攻击者不会附赠防御指令，"
+                                  f"{audit.excerpt(span)}；注入场景里攻击者不会附赠防御指令，"
                                   "这是伪造的困难负例，请删除该字段并改写场景")
             continue
         payload = m.get("payload_span")
@@ -906,14 +920,14 @@ def check_text_style(parsed, audit, args):
 
     for k, v in user_openers.items():
         if v / n > args.max_opener_share:
-            audit.fail("opener", f"{v}/{n} 个场景以 {k!r} 开头；换场景骨架，不要换公司名")
+            audit.fail("opener", f"{v}/{n} 个场景以 {audit.excerpt(k)} 开头；换场景骨架，不要换公司名")
     for k, v in thought_openers.items():
         if v / n > args.max_opener_share:
-            audit.fail("thought", f"{v}/{n} 个 thought 以 {k!r} 开头；thought 口吻太单一")
+            audit.fail("thought", f"{v}/{n} 个 thought 以 {audit.excerpt(k)} 开头；thought 口吻太单一")
     repeated = [(k, v) for k, v in thought_phrases.items()
                 if v > args.max_thought_phrase_cases and v / max(1, n) > 0.25]
     for k, v in sorted(repeated, key=lambda kv: -kv[1])[:3]:
-        audit.fail("thought", f"thought 复用短语 {k!r} 出现在 {v} 个场景；换推理口吻")
+        audit.fail("thought", f"thought 复用短语 {audit.excerpt(k)} 出现在 {v} 个场景；换推理口吻")
     if n >= 6 and len(forms) < 3:
         audit.fail("ids", f"全语料只有 {len(forms)} 种 ID 形式 {sorted(forms)}；至少 3 种"
                            "（NFS-30xx / #4412 / UUID / slug / hex）")
@@ -1164,6 +1178,9 @@ def main():
     ap.add_argument("--min-benign-share", type=float, default=0.25)
     ap.add_argument("--max-benign-share", type=float, default=0.75)
     ap.add_argument("--max-key-share", type=float, default=0.6)
+    ap.add_argument("--redact", action="store_true",
+                    help="报错里不引用语料原文（只给位置、长度和短哈希）。"
+                         "在公开 CI 日志里跑私有语料时必须打开")
     ap.add_argument("--timeout", type=float, default=0.0,
                     help="整次审计的墙钟上限（秒，0=不限）；超时以退出码 3 结束")
     args = ap.parse_args()
@@ -1199,6 +1216,7 @@ def main():
         sys.exit(2)
 
     audit = Audit()
+    audit.redact = bool(getattr(args, "redact", False))
     audit.metrics["cases_loaded"] = len(cases)
     pool, block, freemail, pool_stats = load_email_pool(args.email_library)
     args.email_pool = (pool, block, freemail)

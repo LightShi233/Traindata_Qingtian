@@ -58,6 +58,13 @@ jobs:
             exit 1
           fi
           mkdir -p ~/.ssh
+          # Belt and braces: GitHub masks secret values in logs automatically,
+          # but that masking is per-line for a multi-line value. Register every
+          # line explicitly so an accidental `echo "$DATA_KEY"` in a future edit
+          # still prints *** instead of key material.
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::add-mask::$line"
+          done <<< "$DATA_KEY"
           printf '%s\n' "$DATA_KEY" > ~/.ssh/gitcode_key
           chmod 600 ~/.ssh/gitcode_key
           # GitCode publishes its host key; pin it rather than trusting
@@ -78,7 +85,6 @@ jobs:
           BRANCH="traindata/qoder-${GITHUB_RUN_ID}"
           git switch -c "$BRANCH"
           echo "TRAINDATA_BRANCH=$BRANCH" >> "$GITHUB_ENV"
-          git remote -v
           echo "corpus: gitcode.com/${DATA_REPO} -> ./data"
 
       - name: Align the taxonomy contract
@@ -257,16 +263,21 @@ jobs:
 
             ${{ inputs.prompt_extra }}
 
-      - name: Summarize Qoder CLI transcript
+      - name: Summarize Qoder CLI transcript (no case text)
+        # This log is public; the corpus is not. Only counts, tool names and
+        # exit status are printed — never assistant text or tool arguments,
+        # both of which carry generated cases verbatim.
         if: always() && steps.qoder.outputs.output_file != ''
         env:
           QODER_OUTPUT_FILE: ${{ steps.qoder.outputs.output_file }}
         run: |
           set -uo pipefail
           python3 - "$QODER_OUTPUT_FILE" <<'PY'
-          import json, sys
+          import collections, json, sys
 
-          tools, texts, result = [], [], None
+          tools = collections.Counter()
+          turns = len_msgs = 0
+          result = None
           with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
               for line in fh:
                   line = line.strip()
@@ -277,63 +288,40 @@ jobs:
                   except json.JSONDecodeError:
                       continue
                   if ev.get("type") == "assistant":
+                      len_msgs += 1
                       for part in (ev.get("message") or {}).get("content") or []:
-                          if part.get("type") == "text" and part.get("text"):
-                              texts.append(part["text"])
-                          elif part.get("type") == "tool_use":
-                              raw = part.get("input")
-                              if not isinstance(raw, str):
-                                  raw = json.dumps(raw, ensure_ascii=False)
-                              tools.append((part.get("name") or "?", raw))
+                          if part.get("type") == "tool_use":
+                              tools[part.get("name") or "?"] += 1
                   elif ev.get("type") == "result":
                       result = ev
 
-          print(f"[transcript] {len(texts)} assistant messages / {len(tools)} tool calls")
-          for name, raw in tools[:300]:
-              print(f"[tool] {name}: {' '.join(raw.split())[:160]}")
-          if len(tools) > 300:
-              print(f"... {len(tools) - 300} more tool calls (see artifact)")
-          for text in texts[-20:]:
-              print("::group::assistant")
-              print(text[:1500])
-              print("::endgroup::")
-          if len(texts) > 20:
-              print(f"... {len(texts) - 20} earlier assistant messages omitted")
+          print(f"[transcript] {len_msgs} assistant messages / {sum(tools.values())} tool calls")
+          for name, count in tools.most_common(30):
+              print(f"[tool] {name}: {count}")
+          if len(tools) > 30:
+              print(f"... {len(tools) - 30} more tool names omitted")
           if result is not None:
-              print(f"[result] subtype={result.get('subtype')} is_error={result.get('is_error')} turns={result.get('num_turns')}")
-              final = (result.get("result") or "").strip()
-              if final:
-                  print("::group::final result")
-                  print(final[:2000])
-                  print("::endgroup::")
+              print(f"[result] subtype={result.get('subtype')} "
+                    f"is_error={result.get('is_error')} turns={result.get('num_turns')}")
+          print("[note] assistant text and tool arguments are withheld: the "
+                "transcript contains generated cases and this log is public")
           PY
 
-      - name: Upload Qoder CLI transcript
-        if: always() && steps.qoder.outputs.output_file != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: qoder-transcript
-          path: ${{ steps.qoder.outputs.output_file }}
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Show Qoder CLI log tail on failure
+      - name: Show Qoder CLI failure summary (no case text)
         if: failure()
         env:
           QODER_ERROR: ${{ steps.qoder.outputs.error }}
-          QODER_OUTPUT_FILE: ${{ steps.qoder.outputs.output_file }}
         run: |
           set -uo pipefail
+          # stderr from the CLI can quote prompts or file contents, so only the
+          # first line and the length are shown.
           if [ -n "${QODER_ERROR:-}" ]; then
-            echo "::: tail -n 100 of qodercli stderr :::"
-            printf '%s\n' "$QODER_ERROR" | tail -n 100
-            echo "::: end stderr :::"
+            echo "qodercli stderr: ${#QODER_ERROR} bytes; first line follows"
+            printf '%s\n' "$QODER_ERROR" | head -n 1 | cut -c1-200
+          else
+            echo "qodercli reported no stderr"
           fi
-          if [ -n "${QODER_OUTPUT_FILE:-}" ] && [ -s "$QODER_OUTPUT_FILE" ]; then
-            echo "::: tail -n 200 of ${QODER_OUTPUT_FILE} :::"
-            tail -n 200 "$QODER_OUTPUT_FILE"
-            echo "::: end transcript :::"
-          fi
+          echo "完整日志请到私库对应分支的 CI，或本地复跑：本日志不含语料正文"
 
       - name: Verify generated chunks with the skill gates
         if: ${{ !cancelled() }}
@@ -435,9 +423,12 @@ jobs:
             echo "::group::gates $f"
             python3 ../traindata/scripts/validate_and_integrate.py --check "$f" \
               --taxonomy taxonomy.json --expand --require-complete-cases --timeout 300
+            # --redact: this log is public, the corpus is not. Failures still
+            # name the file and the rule, but never quote case text.
             python3 ../traindata/scripts/audit_diversity.py --chunks "$f" \
               --taxonomy taxonomy.json --require-injection --strict \
               --require-taxonomy-axes --require-salt --require-library-emails \
+              --redact \
               ${MANIFEST[@]+"${MANIFEST[@]}"} --timeout 300
             python3 ../traindata/scripts/salt.py --check "$f"
             echo "::endgroup::"
