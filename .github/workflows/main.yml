@@ -76,7 +76,9 @@ jobs:
           printf 'Host gitcode.com\n  IdentityFile ~/.ssh/gitcode_key\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n' > ~/.ssh/config
           chmod 600 ~/.ssh/config ~/.ssh/known_hosts
           # ./data is gitignored by the public repo, so this checkout cannot be
-          # picked up by a `git add -A` run at the root.
+          # picked up by a `git add -A` run at the root. Wipe it and take the
+          # private corpus wholesale: the private repo is the single source of
+          # truth for both the cases and the taxonomy they were authored against.
           rm -rf data
           git clone --quiet "git@gitcode.com:${DATA_REPO}.git" data
           cd data
@@ -86,25 +88,7 @@ jobs:
           git switch -c "$BRANCH"
           echo "TRAINDATA_BRANCH=$BRANCH" >> "$GITHUB_ENV"
           echo "corpus: gitcode.com/${DATA_REPO} -> ./data"
-
-      - name: Align the taxonomy contract
-        run: |
-          set -euo pipefail
-          # The public repo owns data/taxonomy.json; the private corpus carries a
-          # copy so a round never runs against a stale question set. If the
-          # corpus copy drifted, the public one wins and is committed with the
-          # round.
-          PY=$(command -v python3)
-          "$PY" - <<'PYCODE'
-          import json, pathlib, sys
-          priv = pathlib.Path("data/taxonomy.json")
-          if not priv.exists():
-              sys.exit("corpus has no data/taxonomy.json")
-          have = json.loads(priv.read_text(encoding="utf-8")).get("version")
-          print(f"corpus taxonomy: {have}")
-          PYCODE
-          python3 --version
-          git --version
+          python3 -c "import json;print('taxonomy:',json.load(open('taxonomy.json'))['version'])"
 
       - name: Run Qoder CLI (PAT auth, local model settings)
         id: qoder

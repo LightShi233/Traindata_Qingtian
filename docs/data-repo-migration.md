@@ -83,7 +83,8 @@ git -c core.sshCommand='ssh -i ~/.ssh/traindata_ci -o IdentitiesOnly=yes' \
 2. 把 secret 写成 ~/.ssh/gitcode_key（600），known_hosts 用 GitCode 公示的
    host key 静态写入（不 ssh-keyscan，避免 MITM）
 3. git clone git@gitcode.com:<repo> -> ./data，在 data/ 内切出分支
-4. 模型在 GITHUB_WORKSPACE 工作，语料写在 ./data 里
+4. 模型在 GITHUB_WORKSPACE 工作，语料写在 ./data 里（整个 ./data 就是私库
+   checkout，含它自己的 data/taxonomy.json；公开仓库那份只是参考副本，CI 不用它）
 5. Verify 步骤：cd data，用 ../traindata/scripts/* 重跑 validator / audit /
    salt / check，全部退出码 0 才 touch work/gates_ok
 6. 有 gates_ok 才 cd data && git add -A && git commit && git push
