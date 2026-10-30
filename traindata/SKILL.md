@@ -255,10 +255,28 @@ Tips that make this work in practice:
   name to dodge a bad chunk — `merge` would still pick the old one up.
 - **Subagents emit YAML only — never a gate.** The orchestrator (main agent) is
   the sole executor of `write` / `validate_and_integrate.py` / `audit_diversity.py`
-  / `salvage`. A subagent is *not* expected to run them, and if its shell call is
-  denied by the harness (see "Execution environment" above) that is not a
-  verdict on the data — it is simply un-run. Treat "the subagent could not run
-  `write`" exactly like "the chunk does not exist yet": the main agent runs it.
+  / `salvage` / `merge`, and the only one who reads their exit codes. A
+  subagent's job is exactly three things: `claim` its slot, write that one YAML,
+  echo the `traj_id` / `payload_span` set it authored. It must not write a second
+  file, run `write` or a gate, or declare its own chunk passing — a subagent's
+  "done" without the script's exit code is not evidence. A subagent is *not*
+  expected to run gates, and if its shell call is denied by the harness (see
+  "Execution environment" above) that is not a verdict on the data — it is
+  simply un-run. Treat "the subagent could not run `write`" exactly like "the
+  chunk does not exist yet": the main agent runs it.
+- **One label, one slot; one slot, one label.** Pass unique `--workers` labels
+  (`allocate` rejects duplicates, and rejects the reserved `main` /
+  `orchestrator`). `claim` refuses a slot already owned by another label *and*
+  refuses a label that already holds a different slot, because either way one of
+  the worker's two chunks ends up unwritten with no error. `claim` and `write`
+  also refuse a name from another round: copying a previous round's dispatch
+  table is the most common subagent mistake, so the error names the round that
+  actually owns the slot — follow it, do not rename around it.
+- **The dispatch table travels with the task.** Whatever prompt the orchestrator
+  hands a subagent must state the subagent's own obligations (a–f in the CI
+  prompt), not just the orchestrator's. A subagent told only "write chunk N"
+  will stop after writing and consider itself finished; that is correct
+  behaviour for the contract it was given.
 - **Deliver the per-case plan as a FILE, never inline in the prompt.** A big
   inline matrix gets truncated by the harness, and a subagent that loses the tail
   will silently improvise the missing cases and collide on payloads/ids (this is
@@ -286,6 +304,11 @@ Tips that make this work in practice:
   `salvage` the chunks that pass, then redo the bad one — with `discard` and the
   same slot if it was already written, or in a freshly allocated slot if it was
   never written. Never overwrite a JSONL. A partial round committed is a success.
+  A *blocked* subagent is not an off-plan chunk: it authored nothing, so the
+  orchestrator either writes that slot itself or `discard`s it. Leaving it
+  `pending` is also legal only because `prune` drops verified failures before
+  publishing — a pending slot never reaches the corpus, and its YAML is deleted
+  rather than committed.
 
 See `references/generation-playbook.md` for prompting patterns, chunk sizing,
 parallelization, and the retry loop.

@@ -92,6 +92,19 @@ def _find_repo_root(start):
 
 
 REPO_ROOT = _find_repo_root(HERE)
+
+
+def skill_root_for(path):
+    """The project root that owns ``path``, judging by a skill copy above it."""
+    current = os.path.abspath(path)
+    for _ in range(8):
+        if os.path.isdir(os.path.join(current, "traindata", "scripts")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return None
 # The output root is a *choice*: --data-dir may name any directory, but it must
 # sit inside the project, and the layout under it is fixed. That keeps corpora
 # discoverable ("where did this chunk come from") while letting a run pick a
@@ -244,6 +257,15 @@ def resolve_project_root(path, what="输出目录"):
         return relocated
     if os.path.commonpath([target, root]) == root:
         return target
+    # A root already sitting in another checkout of this skill is that project's
+    # corpus, not this one's: relocating it would silently write into this
+    # project instead, and a test/scratch run would then edit the real round
+    # manifests. Refusing is cheaper than an accidental cross-project write.
+    if skill_root_for(target):
+        print(f"[refuse] {what} {_display(target)} 属于另一个项目（那里也有一份这份 skill）。"
+              f"数据必须留在本项目 {_display(root)} 内；请改用本项目内的路径"
+              f"（默认 {_display(os.path.join(root, 'data'))}）。", file=sys.stderr)
+        raise SystemExit(AUTHORITY_NOTICE)
     relocated = os.path.join(root, os.path.basename(target) or "data")
     print(f"[relocate] {what} {_display(target)} 不在项目内；"
           f"已改用 {_display(relocated)}。数据必须留在项目内。\n"
@@ -470,6 +492,24 @@ def cmd_allocate(args):
         suffix = args.suffix or os.environ.get("GITHUB_RUN_ID") or ""
         if suffix and not re.fullmatch(r"\d{4,}", suffix):
             raise SystemExit(f"--suffix / GITHUB_RUN_ID 必须是 4 位以上数字，实际 {suffix!r}")
+        # A label that names two slots cannot be dispatched: the subagent given
+        # that label has to choose which of "its" chunks to write, and whatever
+        # it skipped is silently dropped. Labels are therefore unique per round.
+        requested = list(args.workers or [])
+        if args.worker:
+            requested.append(args.worker)
+        dupes = sorted({w for w in requested if requested.count(w) > 1})
+        if dupes:
+            raise SystemExit(
+                f"--workers 里同一个子代理出现了多次: {dupes}。每个子代理只认领一个槽位，"
+                "否则它得在「自己的两个 chunk」里二选一，漏掉的那个静默丢失。"
+                "请给每个子代理一个唯一标签，例如 --workers a1 a2 b1 b2")
+        reserved = {"main", "orchestrator", "主代理"}
+        clash = sorted(set(requested) & reserved)
+        if clash:
+            raise SystemExit(
+                f"{clash} 是主代理的保留标签：主代理负责 write 与 gate，不写 YAML。"
+                "子代理请用 a1/b1/s1 之类的标签")
         start = (max(used) + 1) if used else 1
         allocated = []
         for offset in range(args.count):
@@ -520,6 +560,11 @@ def cmd_allocate(args):
         print("  子代理必须逐字复制上面的 chunk 名与路径：名字带了 CI run 号后缀"
               "（chunk_NNNN_<run id>），抄错一位就会写进别人的槽位，"
               "后写的会静默覆盖先写的。")
+        print("  子代理的完整职责只有三件：claim 自己的槽位、写自己那一个 YAML、"
+              "回显自己写的 traj_id / payload_span。它不运行 write 或 gate，"
+              "也不写第二个文件；它说「已通过」不算通过。")
+        print(f"  主代理必须对这 {len(allocated)} 个槽位逐个执行 write + 两个 gate，"
+              "即使某个子代理没回话；收尾前 rounds/<id>.json 里不能剩下 pending。")
     else:
         for allocation in allocated:
             print(f"  {allocation['name']}  yaml={_display(_abs(data_dir, allocation['yaml']))}"
@@ -610,6 +655,7 @@ def cmd_write(args):
         return 1
     allocation = next((a for a in manifest["allocations"] if a["name"] == args.name), None)
     if allocation is None:
+        _reject_foreign_name(data_dir, args.round, args.name)
         raise SystemExit(f"{args.name} 不属于 round {args.round}；"
                          "禁止使用未分配的名字，先运行 allocate")
     owner = allocation.get("claimed_by")
@@ -1072,12 +1118,23 @@ BRIEF = """\
        一个 chunk 的全部 case 写进同一个 YAML；多分配的槽位保持 pending、不会被 merge。
        并行时用 --count <子代理数>，最多 8：每轮（round）的槽位总数硬上限 8，
        因为每个 chunk 都要由主代理 write 并跑两个 gate，再多就验证不过来。
-  1a. 并行时加 --workers a b c：输出会打印「chunk 名 → 子代理」分派表。
-       子代理必须逐字复制自己那一行的名字（名字带 run 号后缀，如
-       chunk_0007_40840653996），并在动笔前认领：
-         claim --round <id> --name <名字> --worker <自己>
-       同一槽位被第二个子代理认领会拒绝；不做认领，后写的 YAML 会静默
-       覆盖先写的，一份产出无声消失。
+  1a. 并行时加 --workers a1 a2 b1 b2：输出会打印「chunk 名 → 子代理」分派表。
+       标签必须互不相同（脚本会拒绝重复标签和保留标签 main/orchestrator）：
+       一个标签认领两个槽位时，它得在「自己的两个 chunk」里二选一，漏掉的静默丢失。
+       子代理的职责只有三件，派任务时就把这三条写进它的任务描述：
+         ① claim 自己的槽位：claim --round <id> --name <名字> --worker <自己>
+         ② 只写自己那一个 YAML（8–12 个 case）
+         ③ 回显自己写的 traj_id 与 payload_span
+       子代理**不得** write / merge / 跑 gate / 跑 git，**不得**写第二个文件，
+       也**不得**自述「已通过」——gate 的退出码只由主代理看。
+       名字必须逐字复制分派表（带 run 号后缀，如 chunk_0007_40840653996）。
+       claim 会拒绝：同一槽位被第二个标签认领、同一标签认领第二个槽位、
+       以及抄了别的轮次的名字（报错会指出属于哪一轮，照提示改名，不要绕）。
+       不做认领，后写的 YAML 会静默覆盖先写的，一份产出无声消失。
+  1b. 主代理收尾义务：子代理返回后，按分派表逐个 write + 跑两个 gate，
+       即使某个子代理没回话也要处理它那个槽位。结束前 rounds/<id>.json 里
+       不能剩下 pending：能过就 write，过不了就 discard。
+       （真实事故：4 个子代理都交了 YAML，主代理只 write 了 2 个就结束。）
   2. 写 YAML（一个 chunk 一个文件，不要写 jsonl、不要写别的路径）
   3. 先过一遍网关（YAML 可直接被读取；预检不要带 --require-salt，salt 章还没盖）：
        validate_and_integrate.py --check <yaml> --taxonomy data/taxonomy.json
@@ -1234,6 +1291,45 @@ def cmd_brief(args):
     return 0
 
 
+def _other_rounds_holding(data_dir, name):
+    """Rounds other than the caller's that also list ``name``.
+
+    A subagent working from a stale dispatch table (an earlier round's printed
+    chunk name, or a name without the run suffix) fails here with a pointer to
+    the right round instead of writing into another round's slot.
+    """
+    rounds_dir = os.path.join(data_dir, "rounds")
+    holders = []
+    if not os.path.isdir(rounds_dir):
+        return holders
+    for entry in sorted(os.listdir(rounds_dir)):
+        if not entry.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(rounds_dir, entry), encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        for allocation in doc.get("allocations", []):
+            if allocation.get("name") == name:
+                holders.append(doc.get("round") or entry[:-5])
+                break
+    return holders
+
+
+def _reject_foreign_name(data_dir, round_id, name):
+    """Refuse a slot name that belongs to a different round."""
+    holders = [r for r in _other_rounds_holding(data_dir, name) if r != round_id]
+    if not holders:
+        return
+    raise SystemExit(
+        f"{name} 属于其它轮次（{[*holders]}），不属于 round {round_id}。\n"
+        f"  你是不是抄了别的轮的分派表？每轮的 chunk 名带本轮 run 号后缀，"
+        f"必须逐字复制 round {round_id} 的 allocate 打印出来的那一行。\n"
+        f"  确认清单：data_writer.py brief 里第 1a 步，或 "
+        f"rounds/{round_id}.json 的 allocations。")
+
+
 def cmd_claim(args):
     """Reserve a chunk slot for one subagent before it writes the YAML.
 
@@ -1247,6 +1343,7 @@ def cmd_claim(args):
     manifest = load_round(data_dir, args.round)
     if manifest is None:
         raise SystemExit(f"没有这个 round: {args.round}")
+    _reject_foreign_name(data_dir, args.round, args.name)
     with _lock(data_dir):
         manifest = load_round(data_dir, args.round)
         allocation = next((a for a in manifest["allocations"] if a["name"] == args.name), None)
@@ -1257,6 +1354,16 @@ def cmd_claim(args):
         if owner and owner != args.worker:
             raise SystemExit(f"{args.name} 已被子代理 {owner!r} 认领，不能再给 {args.worker!r}。"
                              "两个子代理写同一个槽位会互相覆盖，其中一份产出会静默丢失")
+        # One worker is one slot. A label already holding a *different* slot has
+        # been dispatched twice, so this claim would leave one of them unwritten
+        # — the failure mode claiming exists to prevent.
+        sanity = [(a["name"], a.get("claimed_by")) for a in manifest["allocations"]
+                  if a["name"] != args.name and a.get("claimed_by") == args.worker]
+        if sanity:
+            taken = ", ".join(n for n, _ in sanity)
+            raise SystemExit(
+                f"子代理 {args.worker!r} 已经认领了 {taken}，不能再认领 {args.name}。"
+                "一个子代理只写一个槽位；要并行写多个请用不同标签，否则其中一份必定被漏掉")
         allocation["claimed_by"] = args.worker
         allocation["claimed_at"] = _now()
         manifest["updated_at"] = _now()
@@ -1264,6 +1371,8 @@ def cmd_claim(args):
     print(f"claimed {args.name} -> {args.worker}")
     print(f"  只写这一个文件: {_display(_abs(data_dir, allocation['yaml']))}")
     print(f"  写完后由主代理执行 write --round {args.round} --name {args.name}")
+    print("  你的职责到此为止：不运行 write / gate，也不要写第二个文件。"
+          "结束后回显你写的 traj_id 与 payload_span。")
     return 0
 
 

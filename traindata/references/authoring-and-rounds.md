@@ -211,6 +211,32 @@ What the tool enforces:
   the earlier one silently: no gate ever sees the lost work. `claim` refuses a
   second owner, and `write --worker` refuses to accept work on a slot claimed
   by someone else.
+- **One label, one slot.** Labels passed to `--workers` must be unique;
+  `allocate` rejects a repeated label and the reserved `main` /
+  `orchestrator`. `claim` additionally refuses a label that already holds a
+  *different* slot. Both guards exist for the same failure: a worker labelled
+  twice has to pick one of "its" chunks, and the other is dropped in silence.
+- **A name from another round is refused, with the round that owns it.**
+  `claim` and `write` look across `rounds/*.json`; a subagent that copied a
+  previous round's dispatch table gets `chunk_0001 属于其它轮次（['r-a']）…`
+  instead of writing into a slot that this round's `check` will later call
+  unregistered. Fix the name from the current round's table — never rename
+  around the error.
+- **A subagent's contract is exactly three obligations.** Claim the slot, write
+  that one YAML, echo the authored `traj_id` / `payload_span` set. It must not
+  run `write` / `merge` / any gate / any git command, must not write a second
+  file, and its self-report is not a verdict — only the orchestrator's exit
+  codes are. When you hand a subagent its task, restate those three obligations
+  and the prohibitions in the task itself: a subagent given only "write chunk N"
+  is behaving correctly when it stops after writing, which is exactly how the
+  4-subagent / 2-written round was lost. A refused claim or a harness-blocked
+  shell is reported verbatim, never worked around by renaming or swapping slots.
+- **The orchestrator finishes every slot it opened.** After the subagents
+  return, the orchestrator walks the dispatch table and `write`s + gates each
+  slot itself, then confirms `rounds/<id>.json` has no `pending` allocation.
+  Anything it cannot finish is `discard`ed; verified failures are removed from
+  the corpus by `prune` before publish, so a half-finished slot is never
+  committed.
 - **No overwrites; one recovery path.** An existing `chunks/chunk_NNNN.jsonl` is
   never replaced. If the chunk failed a gate, run `discard` (it keeps the YAML
   and returns the slot to `pending`), fix the YAML, and `write` the same name.
