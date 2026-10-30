@@ -318,16 +318,22 @@ jobs:
           # tooling repo and never contains corpora).
           cd data
           if ! git fetch --no-tags origin main:refs/remotes/origin/main >/dev/null 2>&1; then
-            echo "::warning::fetch origin/main 失败，无法确定本分支基线；不做兜底推送"
+            echo "::warning::fetch origin/main 失败，无法确定本分支基线；不校验也不推送"
             exit 0
           fi
-          BASE=$(git merge-base origin/main HEAD)
-          DIRTY=$(git status --porcelain -- chunks rounds taxonomy.json || true)
-          if [ -n "$DIRTY" ]; then
-            echo "::error::data/chunks、data/rounds 或 data/taxonomy.json 有未提交改动；本轮必须以 commit 交付"
-            printf '%s\n' "$DIRTY"
-            exit 1
+          # The agent is not asked to run git, so its output arrives as untracked
+          # files. Commit it here before anything reads BASE..HEAD; every check
+          # below is expressed as a diff against main, and `publish` reuses this
+          # commit. A wiring bug that left the corpus dirty used to dead-end the
+          # round here ("必须以 commit 交付") while forbidding the agent to commit.
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -q -m "data: round ${GITHUB_RUN_ID} (staged by CI before gates)"
+            echo "已提交本轮产出：$(git rev-parse --short HEAD)"
+          else
+            echo "工作区无改动"
           fi
+          BASE=$(git merge-base origin/main HEAD)
           CHANGED=$(git diff --name-only --diff-filter=AM "$BASE"..HEAD -- 'chunks/chunk_*.jsonl' || true)
           NEW_ROUNDS=$(git diff --name-only --diff-filter=AM "$BASE"..HEAD -- 'rounds/*.json' || true)
           if [ -z "$CHANGED" ] && [ -z "$NEW_ROUNDS" ]; then

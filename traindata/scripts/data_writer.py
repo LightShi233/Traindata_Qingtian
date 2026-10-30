@@ -1131,22 +1131,30 @@ def cmd_publish(args):
         print(f"[dry-run] 本地领先 {pending} 个提交")
         return 0
 
+    message = args.message or "data: verified round"
     git("add", "-A")
     if git("diff", "--cached", "--quiet", check=False).returncode != 0:
-        message = args.message or "data: verified round"
         git("commit", "-q", "-m", message)
         print(f"已提交：{message}")
     else:
         print("工作区没有新改动")
 
     # Judge "is there anything to push" from the remote, not from the working
-    # tree: a previous run (or the agent) may have committed without pushing.
+    # tree: a previous run (or CI staging the agent's untracked output) may have
+    # committed without pushing.
     git("fetch", "-q", remote, branch)
     base = f"{remote}/{branch}"
     ahead = git("rev-list", "--count", f"{base}..HEAD").stdout.strip()
     if ahead == "0":
         print(f"与 {base} 无差异，无需推送")
         return 0
+    # Reword our own unpushed commit when CI staged the work instead of the
+    # agent. Guarded on parent == base: amending anything else would rewrite a
+    # commit this run does not own.
+    parent = git("rev-parse", "HEAD~1", check=False).stdout.strip()
+    base_sha = git("rev-parse", base).stdout.strip()
+    if parent == base_sha and git("log", "-1", "--format=%s").stdout.strip() != message:
+        git("commit", "-q", "--amend", "-m", message, check=False)
 
     rebase = git("rebase", "-q", base, check=False)
     if rebase.returncode != 0:
