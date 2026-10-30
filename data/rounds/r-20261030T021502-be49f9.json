@@ -1,0 +1,167 @@
+{
+  "round": "r-20261030T021502-be49f9",
+  "created_at": "2026-10-30T02:15:02+00:00",
+  "baseline": [
+    "chunks/chunk_0001.jsonl",
+    "chunks/chunk_0002.jsonl",
+    "chunks/chunk_0004.jsonl",
+    "chunks/chunk_0005.jsonl",
+    "chunks/chunk_0006.jsonl",
+    "chunks/chunk_0007.jsonl",
+    "chunks/chunk_0008.jsonl",
+    "chunks/chunk_0009_40877273830.jsonl",
+    "chunks/chunk_0011_40884889843.jsonl",
+    "chunks/chunk_0012_40891905371.jsonl",
+    "chunks/chunk_0013.jsonl",
+    "chunks/chunk_0013_40904399864.jsonl",
+    "chunks/chunk_0013_40957388105.jsonl",
+    "inbox/chunk_0001.yaml",
+    "inbox/chunk_0002.yaml",
+    "inbox/chunk_0004.yaml",
+    "inbox/chunk_0005.yaml",
+    "inbox/chunk_0006.yaml",
+    "inbox/chunk_0007.yaml",
+    "inbox/chunk_0008.yaml",
+    "inbox/chunk_0009_40877273830.yaml",
+    "inbox/chunk_0011_40884889843.yaml",
+    "inbox/chunk_0012_40891905371.yaml",
+    "inbox/chunk_0013.yaml",
+    "inbox/chunk_0013_40904399864.yaml",
+    "inbox/chunk_0013_40957388105.yaml"
+  ],
+  "allocations": [
+    {
+      "name": "chunk_0014_40990386477",
+      "base": "chunk_0014",
+      "run_suffix": "40990386477",
+      "yaml": "inbox/chunk_0014_40990386477.yaml",
+      "jsonl": "chunks/chunk_0014_40990386477.jsonl",
+      "status": "written",
+      "worker": "w1",
+      "allocated_at": "2026-10-30T02:15:02+00:00",
+      "claimed_by": "w1",
+      "claimed_at": "2026-10-30T02:15:57+00:00",
+      "written_at": "2026-10-30T02:21:05+00:00",
+      "sha256": "ea21c20d3370839d5a45b6fc82e17fea077a6933a7b56e1790e8122389c0ddf8",
+      "cases": 10
+    },
+    {
+      "name": "chunk_0015_40990386477",
+      "base": "chunk_0015",
+      "run_suffix": "40990386477",
+      "yaml": "inbox/chunk_0015_40990386477.yaml",
+      "jsonl": "chunks/chunk_0015_40990386477.jsonl",
+      "status": "written",
+      "worker": "w2",
+      "allocated_at": "2026-10-30T02:15:02+00:00",
+      "claimed_by": "w2",
+      "claimed_at": "2026-10-30T02:15:56+00:00",
+      "written_at": "2026-10-30T02:21:48+00:00",
+      "sha256": "3f261745bcffb4498a805288c71c1bbed039ee4bfb0b93e343ecf44be391c04c",
+      "cases": 10
+    },
+    {
+      "name": "chunk_0016_40990386477",
+      "base": "chunk_0016",
+      "run_suffix": "40990386477",
+      "yaml": "inbox/chunk_0016_40990386477.yaml",
+      "jsonl": "chunks/chunk_0016_40990386477.jsonl",
+      "status": "written",
+      "worker": "w3",
+      "allocated_at": "2026-10-30T02:15:02+00:00",
+      "claimed_by": "w3",
+      "claimed_at": "2026-10-30T02:15:57+00:00",
+      "written_at": "2026-10-30T02:21:48+00:00",
+      "sha256": "0476e2a7f4ec4a44e8102df354cdedae1c3b2c9ad3c67708f48b48e098c7876c",
+      "cases": 10
+    },
+    {
+      "name": "chunk_0017_40990386477",
+      "base": "chunk_0017",
+      "run_suffix": "40990386477",
+      "yaml": "inbox/chunk_0017_40990386477.yaml",
+      "jsonl": "chunks/chunk_0017_40990386477.jsonl",
+      "status": "written",
+      "worker": "w4",
+      "allocated_at": "2026-10-30T02:15:02+00:00",
+      "claimed_by": "w4",
+      "claimed_at": "2026-10-30T02:15:57+00:00",
+      "written_at": "2026-10-30T02:21:48+00:00",
+      "sha256": "133fc19deb85d88667a6b1b760522a8b62708445f9e88cd8aebe68ebaed38c78",
+      "cases": 10
+    },
+    {
+      "name": "chunk_0018_40990386477",
+      "base": "chunk_0018",
+      "run_suffix": "40990386477",
+      "yaml": "inbox/chunk_0018_40990386477.yaml",
+      "jsonl": "chunks/chunk_0018_40990386477.jsonl",
+      "status": "written",
+      "worker": "w5",
+      "allocated_at": "2026-10-30T02:15:02+00:00",
+      "claimed_by": "w5",
+      "claimed_at": "2026-10-30T02:15:56+00:00",
+      "written_at": "2026-10-30T02:21:05+00:00",
+      "sha256": "3ba64108e8e0f14d6d58cbcef9530cde7773a3152084263c1cdc8e4f10e2319b",
+      "cases": 10
+    },
+    {
+      "name": "chunk_0019_40990386477",
+      "base": "chunk_0019",
+      "run_suffix": "40990386477",
+      "yaml": "inbox/chunk_0019_40990386477.yaml",
+      "jsonl": "chunks/chunk_0019_40990386477.jsonl",
+      "status": "written",
+      "worker": "w6",
+      "allocated_at": "2026-10-30T02:15:02+00:00",
+      "claimed_by": "w6",
+      "claimed_at": "2026-10-30T02:16:17+00:00",
+      "written_at": "2026-10-30T02:21:49+00:00",
+      "sha256": "51a385b6b74fa9b03adf2a40df6d0a1f9cb6bdebcaa57f957016f1e6e601d8b2",
+      "cases": 10
+    }
+  ],
+  "taxonomy_version": "ruhui-triage-v3",
+  "budget_hours": 0.5,
+  "salted_prompt": "work/salted_prompt.txt",
+  "salted_prompt_sha256": "e4edd47b459bf488ebf819cc4523b28c1a98731a2b01a3a7785f336c8728eca5",
+  "salted_prompt_registered_at": "2026-10-30T02:15:02+00:00",
+  "email_batch": [
+    "gpsops@mbakingzl.com",
+    "qianoun@mbakingzl.com",
+    "tanaisabogan@yahoo.fi",
+    "workplace.safety@yahoo.fi",
+    "o.fiore@archivevale.net",
+    "pharmacy10@archivevale.net"
+  ],
+  "email_pairs": [
+    {
+      "domain": "mbakingzl.com",
+      "tier": "disposable",
+      "addresses": [
+        "gpsops@mbakingzl.com",
+        "qianoun@mbakingzl.com"
+      ]
+    },
+    {
+      "domain": "yahoo.fi",
+      "tier": "freemail",
+      "addresses": [
+        "tanaisabogan@yahoo.fi",
+        "workplace.safety@yahoo.fi"
+      ]
+    },
+    {
+      "domain": "archivevale.net",
+      "tier": "synth",
+      "addresses": [
+        "o.fiore@archivevale.net",
+        "pharmacy10@archivevale.net"
+      ]
+    }
+  ],
+  "email_manifest_source": "work/emails.json",
+  "email_batch_registered_at": "2026-10-30T02:15:02+00:00",
+  "run_suffix": "40990386477",
+  "updated_at": "2026-10-30T02:21:49+00:00"
+}
