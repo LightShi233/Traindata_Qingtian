@@ -22,18 +22,27 @@
 
 ### 2. 在 GitCode 登记部署公钥
 
-CI 用一把专用密钥，不是你的账号密钥。
+**CI 必须用一把专用密钥，绝不能用你 `~/.ssh/id_rsa` 这把账号密钥。**
 
 ```bash
 ssh-keygen -t ed25519 -C "traindata-ci" -f ~/.ssh/traindata_ci -N ""
 cat ~/.ssh/traindata_ci.pub
 ```
 
-把这行公钥加到 `gitcode.com/Light233/data` → 设置 → **部署公钥 / SSH 公钥**，
-权限选**可写**（CI 要 push）。若 GitCode 只提供账号级 SSH 公钥，就用一把
-专用账号密钥并只绑到这个仓库。
+把这行公钥加到 `gitcode.com/Light233/data` → 设置 → **部署公钥**，权限选
+**可写**（CI 要 push）。
 
-> 为什么不用账号密钥：账号密钥能访问你名下所有仓库；专用密钥只该能碰这一个。
+为什么这条不能省：账号密钥能读写你 GitCode 名下**所有**仓库。把它放进
+GitHub Secrets，等于让每次 `workflow_dispatch`、每条 PR 的 runner 都握着
+你全账号的写权限——一次 action 供应链投毒、一次日志泄漏，暴露的就是全部。
+专用部署密钥只能碰这一个仓库，出事的影响面被限制在语料上，而且吊销时
+只影响 CI，不影响你自己 push。
+
+如果 GitCode 的部署公钥不支持"可写"，退路是**再注册一个账号专门做 CI**，
+用它生成密钥并只添加到这个仓库，而不是复用主账号的密钥。
+
+> 本仓库 CI 读取的 secret 名是 `TRAINDATA_DATA_SSH_KEY`，与 `id_rsa`
+> 无关。反过来也成立：GitHub 上没有、也不该有 `id_rsa` 这个 secret。
 
 ### 3. 在 GitHub 公开仓库配置
 
@@ -49,7 +58,15 @@ cat ~/.ssh/traindata_ci.pub
 | - | - |
 | `TRAINDATA_DATA_SSH_KEY` | `~/.ssh/traindata_ci` 的**私钥全文**（含 `-----BEGIN OPENSSH PRIVATE KEY-----` 头尾） |
 
-只此两个。公钥不需要存 secret：它是公开的，存在仓库端即可。
+只此两条。
+
+关于公钥：`.pub` 文件**不放进 GitHub**，但这不是因为"可以公开"，而是因为
+它的去向只有一个——GitCode 仓库端的部署公钥列表。它是服务器用来验证你私钥
+的凭据，本来就要登记在服务器上，再存一份到 GitHub 只是多一个泄漏面。
+
+关于私钥：**任何私钥都不得进入公开仓库、不得写进日志、不得留在工作区**。
+CI 里它只存在于 `~/.ssh/gitcode_key`（600），从不进入 `$GITHUB_WORKSPACE`，
+job 结束无论成败都删除（见下文末的清理步骤）。
 
 ### 4. 校验连通性
 

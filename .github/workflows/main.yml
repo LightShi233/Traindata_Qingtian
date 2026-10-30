@@ -14,8 +14,10 @@ on:
     # 40/20 分钟交替节奏，只把两趟整体挪开整点与 :15/:30/:45。
     - cron: '7,47 * * * *'
 
-# This job no longer writes to this repository: corpora go to the private
-# GitCode repo over SSH, so contents/pull-requests/issues writes are not needed.
+# This job never writes to GitHub at all: corpora go to the private GitCode repo
+# over SSH with a dedicated deploy key. So no contents: write, no
+# pull-requests: write, no issues: write — the GITHUB_TOKEN here can only read
+# this repository, which is all `actions/checkout` needs.
 # id-token: write stays — Qoder Action exchanges an OIDC token plus the PAT for
 # a qoderai App installation token, and exits on step one without it.
 permissions:
@@ -372,6 +374,16 @@ jobs:
           if [ -n "$OUTSIDE" ]; then
             echo "::error::本分支改动了语料之外的文件，训练数据轮次不允许："
             printf '%s\n' "$OUTSIDE"
+            exit 1
+          fi
+          # A private key pasted into a case body would be published with the
+          # corpus; data_writer check catches key *files*, this catches key text.
+          LEAK=$(git diff --name-only "$BASE"..HEAD | while read -r f; do
+            [ -f "$f" ] && grep -lE '(BEGIN [A-Z ]*PRIVATE KEY|ssh-(rsa|ed25519) AAAA)' "$f" 2>/dev/null || true
+          done || true)
+          if [ -n "$LEAK" ]; then
+            echo "::error::语料内容里出现私钥或 SSH 公钥文本，拒绝验收："
+            printf '%s\n' "$LEAK"
             exit 1
           fi
           DELETED=$(git diff --name-only --diff-filter=D "$BASE"..HEAD || true)

@@ -987,6 +987,21 @@ def cmd_merge(args):
 # --------------------------------------------------------------------------- #
 # check
 # --------------------------------------------------------------------------- #
+KEY_FILE_RE = re.compile(r"(^id_rsa|^id_ed25519|^id_ecdsa|\.pem$|\.key$|_rsa$|_ed25519$)", re.I)
+
+
+def _looks_like_private_key(path):
+    """True when a file's head contains a PEM private-key header."""
+    try:
+        if os.path.getsize(path) > 64 * 1024:
+            return False
+        with open(path, "rb") as f:
+            head = f.read(512)
+    except OSError:
+        return False
+    return b"PRIVATE KEY-----" in head
+
+
 def _scan_files(data_dir):
     found = []
     for root, dirs, files in os.walk(data_dir):
@@ -1169,6 +1184,15 @@ def cmd_check(args):
             continue
         if base.endswith(".py") or base.endswith(".pyc"):
             add("FAIL", "script", f"输出根目录内出现脚本（禁止模型自造生成器）: {rel}")
+            continue
+        # A private key inside the corpus would be published the moment the
+        # private repo is shared, and it is never legitimate data. Match on the
+        # PEM header rather than the filename, so a renamed copy is still caught.
+        if KEY_FILE_RE.search(base):
+            add("FAIL", "secret", f"语料目录内出现密钥文件: {rel}")
+            continue
+        if _looks_like_private_key(path):
+            add("FAIL", "secret", f"文件内容是私钥，绝不允许进入语料: {rel}")
             continue
         parts = rel.split("/")
         if parts[0] in ("chunks", "inbox"):
