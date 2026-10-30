@@ -774,6 +774,50 @@ def cmd_discard(args):
 # --------------------------------------------------------------------------- #
 # salvage
 # --------------------------------------------------------------------------- #
+def convert_pending(data_dir, manifest, taxonomy_obj, timeout=0.0, ruhui_max_len=1024):
+    """Write every allocated slot whose YAML exists and validates.
+
+    Returns ``(converted, already, skipped)``. Callers are ways to finish a
+    round: ``salvage`` on a stop, and ``publish`` as a last chance before data
+    is pushed. The second caller exists because a model can simply stop early:
+    with parallel subagents the work lands in inbox/ long before the main agent
+    walks the slots, and a run that ends after two writes used to leave two
+    finished chunks behind — valid, gated, and unpublished.
+    """
+    converted, already, skipped = [], [], []
+    for allocation in manifest["allocations"]:
+        name = allocation["name"]
+        yaml_path = _abs(data_dir, allocation["yaml"])
+        jsonl_path = _abs(data_dir, allocation["jsonl"])
+        if allocation.get("status") == "written" and os.path.exists(jsonl_path):
+            already.append(name)
+            continue
+        if not os.path.exists(yaml_path):
+            continue  # never started; nothing to convert
+        deadline = Deadline(timeout)
+        try:
+            payload, _summary, errors = y2j.convert(
+                [yaml_path], taxonomy_obj, expand=False, deadline=deadline,
+                force_validate=True, ruhui_max_len=ruhui_max_len)
+        except TimeoutError as exc:
+            skipped.append((name, f"timeout: {exc}"))
+            continue
+        if errors:
+            skipped.append((name, errors[0]))
+            continue
+        payload, _stripped = stamp_salt(payload, manifest)
+        atomic_write_text(jsonl_path, payload)
+        allocation.update({
+            "status": "written",
+            "written_at": _now(),
+            "converted_by": "auto",
+            "sha256": hashlib.sha256(payload.encode()).hexdigest(),
+            "cases": payload.count("\n"),
+        })
+        converted.append(name)
+    return converted, already, skipped
+
+
 def cmd_salvage(args):
     """Convert whatever this round already produced and ship it.
 
@@ -799,37 +843,9 @@ def cmd_salvage(args):
     with open(taxonomy, encoding="utf-8-sig") as f:
         taxonomy_obj = json.load(f)
 
-    converted, already, skipped = [], [], []
-    for allocation in manifest["allocations"]:
-        name = allocation["name"]
-        yaml_path = _abs(data_dir, allocation["yaml"])
-        jsonl_path = _abs(data_dir, allocation["jsonl"])
-        if allocation.get("status") == "written" and os.path.exists(jsonl_path):
-            already.append(name)
-            continue
-        if not os.path.exists(yaml_path):
-            continue  # never started; nothing to salvage
-        deadline = Deadline(args.timeout)
-        try:
-            payload, _summary, errors = y2j.convert(
-                [yaml_path], taxonomy_obj, expand=False, deadline=deadline,
-                force_validate=True, ruhui_max_len=args.ruhui_max_len)
-        except TimeoutError as exc:
-            skipped.append((name, f"timeout: {exc}"))
-            continue
-        if errors:
-            skipped.append((name, errors[0]))
-            continue
-        payload, _stripped = stamp_salt(payload, manifest)
-        atomic_write_text(jsonl_path, payload)
-        allocation.update({
-            "status": "written",
-            "written_at": _now(),
-            "salvaged": True,
-            "sha256": hashlib.sha256(payload.encode()).hexdigest(),
-            "cases": payload.count("\n"),
-        })
-        converted.append(name)
+    converted, already, skipped = convert_pending(data_dir, manifest, taxonomy_obj,
+                                                  timeout=args.timeout,
+                                                  ruhui_max_len=args.ruhui_max_len)
 
     manifest["salvaged_at"] = _now()
     manifest["salvage_tier"] = tier

@@ -181,6 +181,12 @@ jobs:
                  e) 子代理全部返回后，主代理按分派表顺序逐个
                     write --round <id> --name <名字> --worker <名字>，再跑两个 gate；
                     任何一个失败只修那一个，不要放弃其它 chunk。
+                 f) **必须把每个 allocated 槽位处理完再结束**。子代理交付的 YAML
+                    已经写好了，漏掉 write 等于把它的工作扔掉。收尾前核对
+                    data/rounds/<id>.json：每个 allocation 的 status 都应是
+                    written 或 discarded；还有 pending 就继续处理，不要提前收尾。
+                    这是真实事故：4 个子代理都交了 YAML，主代理只 write 了 2 个就
+                    结束，另外 2 个白做。
 
             4. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
                严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
@@ -320,6 +326,23 @@ jobs:
           if ! git fetch --no-tags origin main:refs/remotes/origin/main >/dev/null 2>&1; then
             echo "::warning::fetch origin/main 失败，无法确定本分支基线；不校验也不推送"
             exit 0
+          fi
+          # A parallel round can end with more finished YAML than the main agent
+          # managed to write: the subagents finish, it walks the slots one at a
+          # time, and a run that stops early used to leave valid, gated-quality
+          # chunks unpublished. Convert every allocated slot whose YAML exists
+          # and validates, *before* the gates, so those chunks are verified by
+          # the same pass instead of being pushed unchecked.
+          ROUND_ID="$(find rounds -maxdepth 1 -name '*.json' -newermt '@0' -printf '%T@ %f\n' 2>/dev/null \
+            | sort -rn | head -1 | cut -d' ' -f2- | sed 's/\.json$//')"
+          if [ -n "$ROUND_ID" ]; then
+            if ! python3 ../traindata/scripts/data_writer.py --data-dir . salvage \
+                 --round "$ROUND_ID" --taxonomy taxonomy.json --timeout 280; then
+              # A merge failure here means the round is internally inconsistent;
+              # gating the rest would just publish a partial picture.
+              echo "::error::自动补齐 pending 槽位或合并本轮失败（round $ROUND_ID）"
+              exit 1
+            fi
           fi
           # The agent is not asked to run git, so its output arrives as untracked
           # files. Commit it here before anything reads BASE..HEAD; every check
