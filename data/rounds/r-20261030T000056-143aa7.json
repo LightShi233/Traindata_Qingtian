@@ -1,0 +1,120 @@
+{
+  "round": "r-20261030T000056-143aa7",
+  "created_at": "2026-10-30T00:00:56+00:00",
+  "baseline": [
+    "chunks/chunk_0001.jsonl",
+    "chunks/chunk_0002.jsonl",
+    "chunks/chunk_0004.jsonl",
+    "chunks/chunk_0005.jsonl",
+    "chunks/chunk_0006.jsonl",
+    "chunks/chunk_0007.jsonl",
+    "chunks/chunk_0008.jsonl",
+    "chunks/chunk_0009_40877273830.jsonl",
+    "chunks/chunk_0011_40884889843.jsonl",
+    "chunks/chunk_0012_40891905371.jsonl",
+    "chunks/chunk_0013.jsonl",
+    "chunks/chunk_0013_40904399864.jsonl",
+    "chunks/chunk_0013_40957388105.jsonl",
+    "inbox/chunk_0001.yaml",
+    "inbox/chunk_0002.yaml",
+    "inbox/chunk_0004.yaml",
+    "inbox/chunk_0005.yaml",
+    "inbox/chunk_0006.yaml",
+    "inbox/chunk_0007.yaml",
+    "inbox/chunk_0008.yaml",
+    "inbox/chunk_0009_40877273830.yaml",
+    "inbox/chunk_0011_40884889843.yaml",
+    "inbox/chunk_0012_40891905371.yaml",
+    "inbox/chunk_0013.yaml",
+    "inbox/chunk_0013_40904399864.yaml",
+    "inbox/chunk_0013_40957388105.yaml",
+    "inbox/chunk_0014.yaml"
+  ],
+  "allocations": [
+    {
+      "name": "chunk_0015",
+      "base": "chunk_0015",
+      "run_suffix": null,
+      "yaml": "inbox/chunk_0015.yaml",
+      "jsonl": "chunks/chunk_0015.jsonl",
+      "status": "written",
+      "worker": null,
+      "allocated_at": "2026-10-30T00:00:56+00:00",
+      "written_at": "2026-10-30T00:01:19+00:00",
+      "sha256": "cca867ff52cb6658d48334616244ce59ea9d23c4b41b7c06baaae01eb0c533ad",
+      "cases": 10
+    }
+  ],
+  "taxonomy_version": "ruhui-triage-v3",
+  "budget_hours": 0.5,
+  "salted_prompt": "work/salted_prompt.txt",
+  "salted_prompt_sha256": "57f078782781694d4c3f2ee7b502e419bf90e6690d25978e467ae022492af40e",
+  "salted_prompt_registered_at": "2026-10-30T00:00:56+00:00",
+  "email_batch": [
+    "w_dilbert@vineyardfen.com",
+    "seniorservices.facilitiesservices@vineyardfen.com",
+    "xenonwalchli@kimo.com",
+    "procurementgroup-digitalops@kimo.com",
+    "forker.f@gmx.co.uk",
+    "reservationscoordination@gmx.co.uk",
+    "hsoutherland@holmwood-finance.net",
+    "q.oieda@holmwood-finance.net",
+    "returnssupport-solutionsengineering@innlark.com",
+    "juanya_needam@innlark.com",
+    "piccogennell@aol.com.mx",
+    "cybersecurity.resourcesteam@aol.com.mx"
+  ],
+  "email_pairs": [
+    {
+      "domain": "vineyardfen.com",
+      "tier": "synth",
+      "addresses": [
+        "w_dilbert@vineyardfen.com",
+        "seniorservices.facilitiesservices@vineyardfen.com"
+      ]
+    },
+    {
+      "domain": "kimo.com",
+      "tier": "freemail",
+      "addresses": [
+        "xenonwalchli@kimo.com",
+        "procurementgroup-digitalops@kimo.com"
+      ]
+    },
+    {
+      "domain": "gmx.co.uk",
+      "tier": "freemail",
+      "addresses": [
+        "forker.f@gmx.co.uk",
+        "reservationscoordination@gmx.co.uk"
+      ]
+    },
+    {
+      "domain": "holmwood-finance.net",
+      "tier": "synth",
+      "addresses": [
+        "hsoutherland@holmwood-finance.net",
+        "q.oieda@holmwood-finance.net"
+      ]
+    },
+    {
+      "domain": "innlark.com",
+      "tier": "synth",
+      "addresses": [
+        "returnssupport-solutionsengineering@innlark.com",
+        "juanya_needam@innlark.com"
+      ]
+    },
+    {
+      "domain": "aol.com.mx",
+      "tier": "freemail",
+      "addresses": [
+        "piccogennell@aol.com.mx",
+        "cybersecurity.resourcesteam@aol.com.mx"
+      ]
+    }
+  ],
+  "email_manifest_source": "work/emails.json",
+  "email_batch_registered_at": "2026-10-30T00:00:56+00:00",
+  "updated_at": "2026-10-30T00:01:19+00:00"
+}
