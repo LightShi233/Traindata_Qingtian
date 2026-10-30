@@ -194,6 +194,14 @@ What the tool enforces:
   (`chunk_0007_40840653996`, from `GITHUB_RUN_ID`, overridable with
   `--suffix`), which is unique across branches. Locally there is no run id and
   the plain `chunk_0007` form is used.
+- **Parallel authoring is encouraged, capped at 8 chunks per round.** Split the
+  work across subagents writing separate chunks; the main agent still runs
+  `write` and both gates on every one. The cap is enforced by `allocate` on the
+  round's total slots (not per call), because past it the review queue — one
+  validation pass per chunk — is what fails the round. Partition
+  `scenario_family` / `entity_family` / `id_style` / `thought_style` across
+  subagents up front; uncoordinated workers converge on one template and the
+  audit rejects the whole round.
 - **No overwrites; one recovery path.** An existing `chunks/chunk_NNNN.jsonl` is
   never replaced. If the chunk failed a gate, run `discard` (it keeps the YAML
   and returns the slot to `pending`), fix the YAML, and `write` the same name.

@@ -117,6 +117,21 @@ jobs:
                子代理只把自己那个 chunk 的 YAML 写进分配好的槽位，并回显它写的
                traj_id 与 payload_span，不执行 write 或 gate。
 
+            3.1 鼓励并行：30 分钟预算下，串行写一个 chunk 只产出 8–12 个 case。
+               请按需开子代理并行写多个 chunk——开 4–8 个最合适，不要超过 8 个。
+               上限 8 个的理由是审查成本：主代理必须逐个核对子代理回显的
+               traj_id / payload_span 并自己重跑 write 与两个 gate，开得再多
+               主代理反而来不及验证，最后整轮通不过。
+               做法：
+                 a) 主代理一次性 allocate --count <子代理数量>，把每个子代理
+                    分配到哪个 chunk 名写在派发指令里；
+                 b) 每个子代理只负责写自己那一个 YAML（8–12 个 case），
+                    不同子代理之间必须使用不同的 scenario_family / entity_family /
+                    id_style / thought_style / injection_surface，否则整轮会因
+                    多样性集中被 audit 拒绝；
+                 c) 子代理全部返回后，主代理按顺序逐个 write → gate，
+                    任何一个失败就单独修那一个，不要放弃其它 chunk。
+
             4. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
                严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
 
@@ -174,8 +189,12 @@ jobs:
             9. 每个 chunk 8–12 个 case（taxonomy 当前有 5 个问题，一个 case 会展开
                5 条记录，别把记录数当 case 数）。并行时每个子代理只写自己的
                一个 chunk，仍遵守 8–12；不要在一次模型调用里塞进超过 12 个
-               case，也不要复制场景凑数。
-            10. 特别强调多样性原则：用脚本检查，多样性不足时强制更改，或用子代理更改
+               case，也不要复制场景凑数。子代理数量上限见 3.1（≤ 8）。
+            10. 特别强调多样性原则：用脚本检查，多样性不足时强制更改。
+                并行度越高，多样性越容易塌：多个子代理很容易不约而同地选同一类
+                场景骨架和组织名。派发时就要把各自的 scenario_family /
+                entity_family / id_style / thought_style 分好，不要等 audit 失败了
+                再回头返工。
 
             ${{ inputs.prompt_extra }}
 
