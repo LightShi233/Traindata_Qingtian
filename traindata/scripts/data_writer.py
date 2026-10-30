@@ -106,7 +106,9 @@ CHUNK_STEM_RE = re.compile(r"^chunk_(\d{4,})(?:_(\d{4,}))?$")
 MAX_CONCURRENT_CHUNKS = 8
 ROUND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 TEMP_RE = re.compile(r"(^\.tmp-|\.tmp$|\.bak$|\.orig$|\.rej$|~\$?$|\.swp$|\.pyc$|^\.DS_Store$|^__pycache__$)")
-ALLOWED_ROOT_FILES = {"taxonomy.json", "ruhui_soft_all.jsonl", "ruhui_soft_card.md"}
+# .gitignore belongs here: when the corpus is its own repository (the private
+# GitCode layout) it carries its own ignore file at the root.
+ALLOWED_ROOT_FILES = {".gitignore", "taxonomy.json", "ruhui_soft_all.jsonl", "ruhui_soft_card.md"}
 ALLOWED_ROOT_DIRS = {"chunks", "inbox", "split", "rounds"}
 ALLOWED_SPLIT = {"train.jsonl", "calibration.jsonl", "test.jsonl", "split_manifest.json"}
 ROOT_PY_ALLOWED = set()  # this repo has no top-level Python entry point

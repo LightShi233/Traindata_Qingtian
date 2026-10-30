@@ -14,11 +14,12 @@ on:
     # 40/20 分钟交替节奏，只把两趟整体挪开整点与 :15/:30/:45。
     - cron: '7,47 * * * *'
 
-# 必须要有这些权限，否则第八条的 gh pr create 会报错
+# This job no longer writes to this repository: corpora go to the private
+# GitCode repo over SSH, so contents/pull-requests/issues writes are not needed.
+# id-token: write stays — Qoder Action exchanges an OIDC token plus the PAT for
+# a qoderai App installation token, and exits on step one without it.
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+  contents: read
   id-token: write
 
 # 强行抢跑，如果上一轮卡住，直接把上一轮踢掉
@@ -35,21 +36,67 @@ jobs:
     # 硬超时先于下一轮发生，job 能正常走到日志摘要与失败报告。
     timeout-minutes: 38 
     steps:
-      - name: Checkout repository
+      # Tooling is this public repo; it is checked out normally at the workspace
+      # root. The corpus is a separate private repo cloned into ./data so the two
+      # git histories never mix.
+      - name: Checkout tooling (this public repo)
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Configure Git identity and branch
+      - name: Clone the private corpus into ./data
+        id: data_checkout
+        env:
+          DATA_REPO: ${{ vars.TRAINDATA_DATA_REPO }}
+          DATA_KEY: ${{ secrets.TRAINDATA_DATA_SSH_KEY }}
         run: |
           set -euo pipefail
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "${DATA_REPO:-}" ] || [ -z "${DATA_KEY:-}" ]; then
+            echo "::error::缺少 TRAINDATA_DATA_REPO（变量，形如 owner/repo）或 TRAINDATA_DATA_SSH_KEY（secret）；生成的数据不写公开仓库"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DATA_KEY" > ~/.ssh/gitcode_key
+          chmod 600 ~/.ssh/gitcode_key
+          # GitCode publishes its host key; pin it rather than trusting
+          # ssh-keyscan at run time.
+          # docs.gitcode.com/docs/help/home/user_center/security_management/ssh/
+          cat > ~/.ssh/known_hosts <<'KNOWN'
+          gitcode.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDKab7YeXOFdPfVqCOrBaksjT3YTSk/E5FgRGEFBdA1M89ZkGt7syJnFlcdnV6L9j2vCAcHroVdY34oxWFp2AxBBxmxg1oz7JaeKLahqqr67wljfH9ky34eKWrgqnDzgSl/PMZ8vNPDTo1ZfHOwa3pAwdpZVfWUxoB8D8UmGrW49fZKiIv+JM1AbBunE4skkOb+5QZyZs12fnQ8EXTsCgBe1RseKplp7ZVMAn2p5nPcK5NpZ1vU+cu5/H5vl4XNlhCnd8QnyXDrAvhlG3Mo/959K5XDUI7m2pR3fs9Z5BF8ZNRj7uoQyzOuUThbLnIqvhlArPvhyRj+W8sjp+ZlEyxr
+          KNOWN
+          printf 'Host gitcode.com\n  IdentityFile ~/.ssh/gitcode_key\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config ~/.ssh/known_hosts
+          # ./data is gitignored by the public repo, so this checkout cannot be
+          # picked up by a `git add -A` run at the root.
+          rm -rf data
+          git clone --quiet "git@gitcode.com:${DATA_REPO}.git" data
+          cd data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           BRANCH="traindata/qoder-${GITHUB_RUN_ID}"
           git switch -c "$BRANCH"
           echo "TRAINDATA_BRANCH=$BRANCH" >> "$GITHUB_ENV"
-          git --version
+          git remote -v
+          echo "corpus: gitcode.com/${DATA_REPO} -> ./data"
+
+      - name: Align the taxonomy contract
+        run: |
+          set -euo pipefail
+          # The public repo owns data/taxonomy.json; the private corpus carries a
+          # copy so a round never runs against a stale question set. If the
+          # corpus copy drifted, the public one wins and is committed with the
+          # round.
+          PY=$(command -v python3)
+          "$PY" - <<'PYCODE'
+          import json, pathlib, sys
+          priv = pathlib.Path("data/taxonomy.json")
+          if not priv.exists():
+              sys.exit("corpus has no data/taxonomy.json")
+          have = json.loads(priv.read_text(encoding="utf-8")).get("version")
+          print(f"corpus taxonomy: {have}")
+          PYCODE
           python3 --version
+          git --version
 
       - name: Run Qoder CLI (PAT auth, local model settings)
         id: qoder
@@ -146,7 +193,7 @@ jobs:
             4. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
                严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
 
-            4.1 cron 每 40 分钟会起一轮，所以同时可能有多个 PR 在路上，它们互相
+            4.1 cron 每 40 分钟会起一轮，所以同时可能有多个生成分支在路上，它们互相
                看不到对方的数据（allocate 只扫描本分支已有的 chunk）。
                为此 chunk 名自动带本轮 CI run 号后缀：chunk_0007_40840653996。
                不同 run 的编号从同一个起点开始也不会撞，你无需处理。
@@ -185,17 +232,16 @@ jobs:
                  把已完成且合法的部分转换、合并并提交。半成品提交算成功，
                  用完预算却什么都没交是失败。
 
-            8. 完成后提交，开一个 PR 标题前缀为 [traindata_add]。
-               分支已经由 workflow 建好并 checkout（见环境变量 TRAINDATA_BRANCH），
-               直接在这个分支上提交，不要自己再建分支，也不要 push 到 main：
+            8. 完成后提交并推送。数据仓库在 GitCode（不是 GitHub），没有 gh CLI，
+               所以不要开 PR，直接推到你被创建的那个分支：
                  git add -A data/ && git commit -m "data: <本轮摘要>"
                  git push -u origin "$TRAINDATA_BRANCH"
-                 gh pr create --base main --head "$TRAINDATA_BRANCH" \
-                   --title "[traindata_add] <一句话说明>" --body-file <你写的 body 文件>
-               PR body 里必须贴出 validator、audit（预检/复检）、salt.py --check、
-               data_writer.py check 的退出码，以及本轮的场景数与 chunk 数。
+               分支已经由 workflow 建好并 checkout（见环境变量 TRAINDATA_BRANCH），
+               不要自己再建分支，也不要直接 push 到 main。
+               提交信息里写明本轮的场景数与 chunk 数；gate 的退出码由 CI 的
+               Verify 步骤独立复核，不需要你贴进任何地方。
                不要提交 data/taxonomy.json 的改动；CI 会拒绝验收。
-               如果本轮没有任何合法产出，不要开 PR，直接以失败结束并说明原因。
+               如果本轮没有任何合法产出，不要提交任何东西，直接以失败结束并说明原因。
 
             9. 每个 chunk 8–12 个 case（taxonomy 当前有 5 个问题，一个 case 会展开
                5 条记录，别把记录数当 case 数）。并行时每个子代理只写自己的
@@ -294,19 +340,23 @@ jobs:
           rm -f work/gates_ok
           mkdir -p work
 
+          # The corpus is its own repository under ./data: every git query here
+          # and below runs there, not at the workspace root (which is the public
+          # tooling repo and never contains corpora).
+          cd data
           if ! git fetch --no-tags origin main:refs/remotes/origin/main >/dev/null 2>&1; then
-            echo "::warning::fetch origin/main 失败，无法确定本分支基线；不创建兜底 PR"
+            echo "::warning::fetch origin/main 失败，无法确定本分支基线；不做兜底推送"
             exit 0
           fi
           BASE=$(git merge-base origin/main HEAD)
-          DIRTY=$(git status --porcelain -- data/chunks data/rounds data/taxonomy.json || true)
+          DIRTY=$(git status --porcelain -- chunks rounds taxonomy.json || true)
           if [ -n "$DIRTY" ]; then
             echo "::error::data/chunks、data/rounds 或 data/taxonomy.json 有未提交改动；本轮必须以 commit 交付"
             printf '%s\n' "$DIRTY"
             exit 1
           fi
-          CHANGED=$(git diff --name-only --diff-filter=AM "$BASE"..HEAD -- 'data/chunks/chunk_*.jsonl' || true)
-          NEW_ROUNDS=$(git diff --name-only --diff-filter=AM "$BASE"..HEAD -- 'data/rounds/*.json' || true)
+          CHANGED=$(git diff --name-only --diff-filter=AM "$BASE"..HEAD -- 'chunks/chunk_*.jsonl' || true)
+          NEW_ROUNDS=$(git diff --name-only --diff-filter=AM "$BASE"..HEAD -- 'rounds/*.json' || true)
           if [ -z "$CHANGED" ] && [ -z "$NEW_ROUNDS" ]; then
             echo "本分支没有新增数据，跳过 gate 校验"
             exit 0
@@ -316,33 +366,35 @@ jobs:
             exit 1
           fi
 
-          OUTSIDE=$(git diff --name-only "$BASE"..HEAD | grep -v '^data/' || true)
+          # Everything under this corpus repo is data; a round may not touch
+          # anything else in it (taxonomy is the one exception, checked below).
+          OUTSIDE=$(git diff --name-only "$BASE"..HEAD | grep -v '^\(chunks\|inbox\|rounds\)/' | grep -v '^taxonomy.json$' || true)
           if [ -n "$OUTSIDE" ]; then
-            echo "::error::本分支改动了 data/ 之外的文件，训练数据轮次不允许："
+            echo "::error::本分支改动了语料之外的文件，训练数据轮次不允许："
             printf '%s\n' "$OUTSIDE"
             exit 1
           fi
-          DELETED=$(git diff --name-only --diff-filter=D "$BASE"..HEAD -- data/ || true)
+          DELETED=$(git diff --name-only --diff-filter=D "$BASE"..HEAD || true)
           if [ -n "$DELETED" ]; then
-            echo "::error::本分支删除了 data/ 下的文件，训练数据轮次只允许新增："
+            echo "::error::本分支删除了语料文件，训练数据轮次只允许新增："
             printf '%s\n' "$DELETED"
             exit 1
           fi
-          MODIFIED=$(git diff --name-only --diff-filter=M "$BASE"..HEAD -- 'data/chunks/chunk_*.jsonl' 'data/inbox/chunk_*.yaml' || true)
+          MODIFIED=$(git diff --name-only --diff-filter=M "$BASE"..HEAD -- 'chunks/chunk_*.jsonl' 'inbox/chunk_*.yaml' || true)
           if [ -n "$MODIFIED" ]; then
             echo "::error::本分支修改了已存在的 chunk；旧 chunk 不允许改写，新数据请走新槽位："
             printf '%s\n' "$MODIFIED"
             exit 1
           fi
-          if ! git diff --quiet "$BASE"..HEAD -- data/taxonomy.json; then
-            echo "::error::data/taxonomy.json 被改动；它是跨 chunk 的稳定契约，拒绝验收"
+          if ! git diff --quiet "$BASE"..HEAD -- taxonomy.json; then
+            echo "::error::taxonomy.json 被改动；它是跨 chunk 的稳定契约，拒绝验收"
             exit 1
           fi
 
           python3 - <<'PY'
           import glob, json
           emails, pairs, pair_keys = [], [], set()
-          for path in sorted(glob.glob("data/rounds/*.json")):
+          for path in sorted(glob.glob("rounds/*.json")):
               with open(path, encoding="utf-8-sig") as f:
                   doc = json.load(f)
               for addr in doc.get("email_batch", []):
@@ -357,66 +409,73 @@ jobs:
           if pairs:
               out["pairs"] = pairs
           if emails:
-              with open("work/verify_emails.json", "w", encoding="utf-8") as f:
+              with open("../work/verify_emails.json", "w", encoding="utf-8") as f:
                   json.dump(out, f)
           print(f"email whitelist: {len(emails)} addresses / {len(pairs)} pairs from round manifests")
           PY
           MANIFEST=()
-          if [ -s work/verify_emails.json ]; then
-            MANIFEST=(--email-manifest work/verify_emails.json)
+          if [ -s ../work/verify_emails.json ]; then
+            MANIFEST=(--email-manifest ../work/verify_emails.json)
           fi
 
+          # The skill lives one level up (public tooling), the corpus is cwd.
           for f in $CHANGED; do
             echo "::group::gates $f"
-            python3 traindata/scripts/validate_and_integrate.py --check "$f" \
-              --taxonomy data/taxonomy.json --expand --require-complete-cases --timeout 300
-            python3 traindata/scripts/audit_diversity.py --chunks "$f" \
-              --taxonomy data/taxonomy.json --require-injection --strict \
+            python3 ../traindata/scripts/validate_and_integrate.py --check "$f" \
+              --taxonomy taxonomy.json --expand --require-complete-cases --timeout 300
+            python3 ../traindata/scripts/audit_diversity.py --chunks "$f" \
+              --taxonomy taxonomy.json --require-injection --strict \
               --require-taxonomy-axes --require-salt --require-library-emails \
               ${MANIFEST[@]+"${MANIFEST[@]}"} --timeout 300
-            python3 traindata/scripts/salt.py --check "$f"
+            python3 ../traindata/scripts/salt.py --check "$f"
             echo "::endgroup::"
           done
 
           if [ -n "$NEW_ROUNDS" ]; then
             for m in $NEW_ROUNDS; do
               r=$(basename "$m" .json)
-              python3 traindata/scripts/data_writer.py check --round "$r" --strict
+              python3 ../traindata/scripts/data_writer.py --data-dir . check --round "$r" --strict
             done
           else
-            python3 traindata/scripts/data_writer.py check --strict
+            python3 ../traindata/scripts/data_writer.py --data-dir . check --strict
           fi
 
-          touch work/gates_ok
-          echo "所有 gate 通过；允许创建兜底 PR"
+          touch ../work/gates_ok
+          echo "所有 gate 通过；允许推送"
 
-      - name: Ensure pull request exists
+      - name: Commit and push verified data, then wipe the clone
+        # GitCode has no `gh` CLI and the corpus repo is private with no outside
+        # contributors, so gate-passing work is pushed straight to this run's
+        # branch. Everything happens inside ./data: a `git add -A` at the
+        # workspace root would target the public repo instead.
         if: ${{ !cancelled() }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
+          cd data
           BRANCH="${TRAINDATA_BRANCH:-}"
           if [ -z "$BRANCH" ]; then
             echo "没有分支信息，跳过"; exit 0
           fi
-          if [ ! -f work/gates_ok ]; then
-            echo "gate 复核未通过或没有新增 chunk；不创建兜底 PR"; exit 0
+          if [ ! -f ../work/gates_ok ]; then
+            echo "gate 复核未通过或没有新增 chunk；不推送"; exit 0
           fi
-          if ! git rev-parse --verify --quiet "origin/$BRANCH" >/dev/null; then
-            git push -u origin "$BRANCH" || { echo "分支没有可推送内容，跳过"; exit 0; }
+          git add -A
+          if git diff --cached --quiet && [ -z "$(git log origin/main..HEAD --oneline)" ]; then
+            echo "没有数据产出，不推送"; exit 0
           fi
-          AHEAD=$(git rev-list --count "origin/main..origin/$BRANCH" 2>/dev/null || echo 0)
-          if [ "$AHEAD" -eq 0 ]; then
+          git commit -q -m "data: ${BRANCH}" || true
+          AHEAD=$(git rev-list --count origin/main..HEAD)
+          if [ "$AHEAD" = "0" ]; then
             echo "分支与 main 无差异，没有数据产出"; exit 0
           fi
-          OPEN=$(gh pr list --head "$BRANCH" --state open --json number --jq 'length' 2>/dev/null || echo 0)
-          case "$OPEN" in
-            ''|*[!0-9]*) OPEN=0 ;;
-          esac
-          if [ "$OPEN" -gt 0 ]; then
-            echo "PR 已存在（$OPEN 个），跳过"; exit 0
-          fi
-          gh pr create --base main --head "$BRANCH" \
-            --title "[traindata_add] 自动补充：${BRANCH}" \
-            --body "模型未自行开 PR，此处兜底创建。workflow 已在 Verify generated chunks 步骤对新增 chunk 重跑 validator / audit / salt / check，全部退出码为 0 才会走到这里。"
+          git push -q -u origin "$BRANCH" && echo "已推送 ${AHEAD} 个提交到 gitcode.com/${BRANCH}"
+
+      - name: Wipe credentials and the local corpus clone
+        if: always()
+        run: |
+          # Neither the deploy key nor a local copy of the corpus should outlive
+          # the job. The runner is ephemeral, but leaving a private key on disk is
+          # a credential nobody is watching, and the data is not ours to leave.
+          rm -f ~/.ssh/gitcode_key ~/.ssh/config ~/.ssh/known_hosts || true
+          rm -rf "$GITHUB_WORKSPACE/data" || true
+          echo "已删除私钥与本地语料副本"
