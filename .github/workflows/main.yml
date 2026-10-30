@@ -8,6 +8,14 @@ on:
         required: false
         default: ''
         type: string
+      model:
+        description: '本轮使用的模型：dfmodel（默认，DeepSeek-Flash）或 qfmodel（Qwen3.8-Flash）'
+        required: false
+        default: dfmodel
+        type: choice
+        options:
+          - dfmodel
+          - qfmodel
   schedule:
     # 40 分钟节奏（实验得出的合适值），原写法 */40 落在 :00 和 :40，
     # 而 :00 正是 GitHub 调度最拥堵的整点。改成 :07/:47 保持完全相同的
@@ -99,6 +107,7 @@ jobs:
           flags: |
             --dangerously-skip-permissions
             --settings .github/qoder-settings.json
+            --model ${{ inputs.model || 'dfmodel' }}
           prompt: |
             按仓库内的 ./traindata/SKILL.md 契约与流程为 Ruhui 编写训练数据
             （这是仓库内的 skill，不需要安装、复制或修改它）。

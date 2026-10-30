@@ -1,6 +1,5 @@
 {
   "model": {
-    "name": "dfmodel",
     "contextWindow": 1000000,
     "preferences": {
       "fast": {
@@ -16,7 +15,10 @@
         "contextWindow": 1000000
       },
       "qfmodel": {
-        "contextWindow": 1000000
+        "contextWindow": 1000000,
+        "reasoning": {
+          "effort": "low"
+        }
       },
       "dfmodel": {
         "contextWindow": 1000000

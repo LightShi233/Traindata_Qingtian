@@ -69,7 +69,12 @@ GitHub Secrets，等于让每次 `workflow_dispatch`、每条 PR 的 runner 都�
   checkout 用）和 `id-token: write`（给 Qoder action 换 token 用），
   没有任何 PR / commit / issues 写权限
 - **不需要 Python 安装步骤**：`ubuntu-latest` 自带 python3 ≥ 3.9，脚本只用标准库
-- **不需要配置模型**：`.github/qoder-settings.json` 已在仓库里，通过 `--settings` 传入
+- **不需要额外配置模型**：`.github/qoder-settings.json` 已在仓库里，通过
+  `--settings` 传入（模型清单与各自的 contextWindow / reasoning 偏好）。
+  **具体用哪个模型由每次运行的 `--model` 决定**：定时触发默认 `dfmodel`
+  （DeepSeek-Flash），手动触发时 `workflow_dispatch` 的 `model` 输入可以选
+  `qfmodel`（Qwen3.8-Flash）。settings 里不再写 `model.name`，免得和命令行同名
+  配置打架。
 - **不要把公钥存成 secret**：它只该出现在 GitCode 的部署公钥列表里
 
 关于公钥：`.pub` 文件**不放进 GitHub**，但这不是因为"可以公开"，而是因为
