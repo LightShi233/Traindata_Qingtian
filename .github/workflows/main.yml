@@ -220,24 +220,19 @@ jobs:
                命令会显示 ⚠/⛔ 计时提示：
                - ⚠ warn（超过 75%，约 22 分钟）：把手上这份 YAML 写完，不要再开新场景。
                - ⛔ stop（超过 30 分钟）：write 会拒绝新 chunk。此时必须立即执行
-                 data_writer.py salvage --round <id> --taxonomy data/taxonomy.json --commit
-                 把已完成且合法的部分转换、合并并提交。半成品提交算成功，
-                 用完预算却什么都没交是失败。
+                 data_writer.py salvage --round <id> --taxonomy data/taxonomy.json
+                 把已完成且合法的部分转换并合并；推送仍由 CI 负责，不要加 --commit，
+                 也不要自己跑 git。半成品能被交付算成功，用完预算却什么都没交是失败。
 
-            8. 完成后提交并推送。数据仓库在 GitCode（不是 GitHub），没有 gh CLI，
-               所以不要开 PR，直接推到你被创建的那个分支。
-               注意：你的 cwd 是工具仓库根，而 ./data 本身是一个独立的 git 仓库
-               （私有语料），所以 git 命令必须先进到 data/ 里再执行：
-                 cd data && git add -A && git commit -m "data: <本轮摘要>"
-                 git push -u origin "$TRAINDATA_BRANCH"
-               不要在外面（工具仓库根）执行 git add/commit/push：那里看不见
-               data/ 的内容，会报"未匹配任何文件"，而且绝不该向工具仓库提交。
-               分支已经由 workflow 建好并 checkout（见环境变量 TRAINDATA_BRANCH），
-               不要自己再建分支，也不要直接 push 到 main。
-               提交信息里写明本轮的场景数与 chunk 数；gate 的退出码由 CI 的
-               Verify 步骤独立复核，不需要你贴进任何地方。
-               不要提交 data/taxonomy.json 的改动；CI 会拒绝验收。
-               如果本轮没有任何合法产出，不要提交任何东西，直接以失败结束并说明原因。
+            8. 不要执行任何 git 命令（add / commit / push 都不行）。
+               推送由 CI 在 gate 通过后自动完成，你只管把 chunk 做到能过 gate。
+               你的工作终点是：
+                 a) 每个 chunk 都 write 成功、preflight 与 write 后两条 gate 全过；
+                 b) 跑 data_writer.py check --round <id> --strict 退出码 0；
+                 c) merge --round <id> 已执行（这一步会生成 soft_*.jsonl）。
+               完成后在最终回复里写明：轮次、chunk 数、case 数、每条 gate 的退出码。
+               如果本轮没有任何合法产出，不要留半成品，直接说明原因并结束。
+               不要改 data/taxonomy.json；CI 会拒绝验收。
 
             9. 每个 chunk 8–12 个 case（taxonomy 当前有 5 个问题，一个 case 会展开
                5 条记录，别把记录数当 case 数）。并行时每个子代理只写自己的
@@ -434,32 +429,25 @@ jobs:
           touch ../work/gates_ok
           echo "所有 gate 通过；允许推送"
 
-      - name: Commit and push verified data, then wipe the clone
-        # GitCode has no `gh` CLI and the corpus repo is private with no outside
-        # contributors, so gate-passing work is pushed straight to this run's
-        # branch. Everything happens inside ./data: a `git add -A` at the
-        # workspace root would target the public repo instead.
+      - name: Publish verified data to the corpus main
+        # The agent is never asked to run git: a model can forget the step, and
+        # the failure modes (nested repository, rebase, push race) are invisible
+        # to it. `data_writer publish` is the only path from "gates passed" to
+        # "data landed", and CI calls it here so a forgotten call cannot lose a
+        # whole round.
+        #
+        # It pushes to main rather than a per-run branch: a branch per run leaves
+        # the corpus scattered over dozens of refs, and the concurrency group
+        # above already serialises rounds. When main moved anyway, publish
+        # rebases the append instead of forcing, so no round's cases are dropped.
         if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
-          cd data
-          BRANCH="${TRAINDATA_BRANCH:-}"
-          if [ -z "$BRANCH" ]; then
-            echo "没有分支信息，跳过"; exit 0
-          fi
-          if [ ! -f ../work/gates_ok ]; then
+          if [ ! -f work/gates_ok ]; then
             echo "gate 复核未通过或没有新增 chunk；不推送"; exit 0
           fi
-          git add -A
-          if git diff --cached --quiet && [ -z "$(git log origin/main..HEAD --oneline)" ]; then
-            echo "没有数据产出，不推送"; exit 0
-          fi
-          git commit -q -m "data: ${BRANCH}" || true
-          AHEAD=$(git rev-list --count origin/main..HEAD)
-          if [ "$AHEAD" = "0" ]; then
-            echo "分支与 main 无差异，没有数据产出"; exit 0
-          fi
-          git push -q -u origin "$BRANCH" && echo "已推送 ${AHEAD} 个提交到 gitcode.com/${BRANCH}"
+          python3 traindata/scripts/data_writer.py --data-dir data publish \
+            --message "data: round ${GITHUB_RUN_ID} (verified by CI gates)"
 
       - name: Wipe credentials and the local corpus clone
         if: always()

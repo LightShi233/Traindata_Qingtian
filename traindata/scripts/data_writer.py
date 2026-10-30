@@ -861,36 +861,19 @@ def cmd_salvage(args):
 
 
 def _commit_salvage(data_dir, round_id, names):
-    """Commit exactly this round's artifacts, nothing else."""
-    if not REPO_ROOT:
-        print("当前目录不是 git 仓库，无法 --commit；请手动提交上述文件。")
-        return 1
-    rel_data = os.path.relpath(os.path.abspath(data_dir), REPO_ROOT).replace(os.sep, "/")
-    targets = [f"{rel_data}/rounds/{round_id}.json"]
-    for name in names:
-        targets.append(f"{rel_data}/inbox/{name}.yaml")
-        targets.append(f"{rel_data}/chunks/{name}.jsonl")
-    targets.append(f"{rel_data}/rounds/{round_id}/")
-    existing = [t for t in targets if os.path.exists(_abs(REPO_ROOT, t))]
-    if not existing:
-        print("没有可提交的文件。")
-        return 1
-    add = subprocess.run(["git", "add", "--"] + existing, cwd=REPO_ROOT,
-                         capture_output=True, text=True)
-    if add.returncode != 0:
-        print(f"git add 失败: {add.stderr.strip()}")
-        return 1
+    """Publish the salvaged round through the one git path in this tool.
+
+    Salvage used to shell out to git at the project root, which is wrong
+    whenever the corpus is its own repository (the CI layout): the paths it
+    computed did not exist there. Delegating to ``publish`` keeps a single
+    implementation of "commit and push the corpus".
+    """
     total = sum(a.get("cases", 0) for a in
                 (load_round(data_dir, round_id) or {}).get("allocations", []))
     message = (f"data: salvage {len(names)} chunk(s) from round {round_id} "
                f"after the time budget ({total} cases)")
-    commit = subprocess.run(["git", "commit", "-q", "-m", message], cwd=REPO_ROOT,
-                            capture_output=True, text=True)
-    if commit.returncode != 0:
-        print(f"git commit 失败: {commit.stderr.strip() or commit.stdout.strip()}")
-        return 1
-    print(f"已提交: {message}")
-    return 0
+    return cmd_publish(argparse.Namespace(
+        data_dir=data_dir, remote=None, branch=None, message=message, dry_run=False))
 
 
 # --------------------------------------------------------------------------- #
@@ -1048,7 +1031,10 @@ BRIEF = """\
      再运行 salt.py --check <chunk> 确认每个 case 都有宿主章
   6. merge --round <id>      （只合并 written，discarded/pending 自动跳过）
   7. check --round <id> --strict
-  超时由脚本判定：warn 收尾，stop 用 salvage --commit 交付已完成部分。
+  超时由脚本判定：warn 收尾，stop 用 salvage（不带 --commit）交付已完成部分。
+  提交与推送不归 agent：不要执行任何 git 命令。gate 全过后由 CI 调用
+    publish      （提交并推送到私有语料仓库的 main；并发时自动 rebase）
+  完成工作后即可结束，推送失败也由 CI 报错，不需要你处理。
   脚本退出码是唯一权威：0 通过，非 0 未通过。不要改检查来让它变绿。
   data/taxonomy.json 是跨 chunk 的稳定契约，不要修改；改了已通过的数据全部失效。
 
@@ -1107,6 +1093,71 @@ YAML case 的最小形状（每个 case 一个映射）：
 需要完整规则时看：traindata/SKILL.md（契约）、traindata/references/anti-shortcut.md
 （meta 字段表与多样性预算）。读文档即可，不要读 scripts/ 的实现。
 """ 
+
+
+def cmd_publish(args):
+    """Commit the corpus and push it to the private remote's main.
+
+    The agent never runs git. Git is not a task ("write a case"), it is plumbing
+    with failure modes the agent cannot see — a nested repository, a rebase, a
+    push race — and every one of those turns into wasted model turns or a
+    corrupted corpus. This command is the only sanctioned path from "chunks
+    verified" to "data landed".
+
+    The corpus is append-only, so when main has moved the local data commit is
+    rebased on top rather than forced: replaying an append can never drop
+    someone else's cases, while a force push could.
+    """
+    data_dir = os.path.abspath(args.data_dir)
+    if not os.path.isdir(os.path.join(data_dir, ".git")):
+        raise SystemExit(f"{_display(data_dir)} 不是独立的 git 仓库；"
+                         "publish 只用于私有语料仓库，/data 下没有 .git 说明环境不对")
+    remote = args.remote or "origin"
+    branch = args.branch or "main"
+
+    def git(*cmd, check=True, quiet=True):
+        proc = subprocess.run(["git", "-C", data_dir, *cmd],
+                              capture_output=True, text=True)
+        if check and proc.returncode != 0:
+            raise SystemExit(f"git {' '.join(cmd)} 失败：\n{proc.stderr.strip()}")
+        return proc
+
+    if args.dry_run:
+        print(f"[dry-run] 将把 {_display(data_dir)} 提交并推送到 {remote}/{branch}")
+        print(git("status", "--short").stdout.rstrip() or "(工作区干净)")
+        git("fetch", "-q", remote, branch, check=False)
+        pending = git("rev-list", "--count", f"{remote}/{branch}..HEAD",
+                      check=False).stdout.strip() or "0"
+        print(f"[dry-run] 本地领先 {pending} 个提交")
+        return 0
+
+    git("add", "-A")
+    if git("diff", "--cached", "--quiet", check=False).returncode != 0:
+        message = args.message or "data: verified round"
+        git("commit", "-q", "-m", message)
+        print(f"已提交：{message}")
+    else:
+        print("工作区没有新改动")
+
+    # Judge "is there anything to push" from the remote, not from the working
+    # tree: a previous run (or the agent) may have committed without pushing.
+    git("fetch", "-q", remote, branch)
+    base = f"{remote}/{branch}"
+    ahead = git("rev-list", "--count", f"{base}..HEAD").stdout.strip()
+    if ahead == "0":
+        print(f"与 {base} 无差异，无需推送")
+        return 0
+
+    rebase = git("rebase", "-q", base, check=False)
+    if rebase.returncode != 0:
+        git("rebase", "--abort", check=False)
+        raise SystemExit(
+            f"rebase 到 {base} 失败，可能有冲突：\n{rebase.stderr.strip()}\n"
+            "语料是只追加的，冲突通常意味着两个 run 写了同一个 chunk；请人工检查")
+    git("push", "-q", remote, f"HEAD:{branch}")
+    head = git("rev-parse", "--short", "HEAD").stdout.strip()
+    print(f"已推送到 {remote}/{branch}：{head}")
+    return 0
 
 
 def cmd_brief(args):
@@ -1405,13 +1456,21 @@ def main():
     claim.add_argument("--worker", required=True, help="认领它的子代理标签")
     claim.set_defaults(func=cmd_claim)
 
+    publish = sub.add_parser(
+        "publish", help="提交语料并推送到私有远端（agent 不碰 git，只用这个）")
+    publish.add_argument("--remote", default=None, help="默认 origin")
+    publish.add_argument("--branch", default=None, help="默认 main")
+    publish.add_argument("--message", default=None, help="提交信息")
+    publish.add_argument("--dry-run", action="store_true", help="只显示将提交什么")
+    publish.set_defaults(func=cmd_publish)
+
     sub.add_parser("list-dirs", help="列出项目内可作为输出根目录的候选").set_defaults(
         func=cmd_list_dirs)
     sub.add_parser("brief", help="打印 agent 速查：流程、字段、常见拒绝原因").set_defaults(
         func=cmd_brief)
 
     args = parser.parse_args()
-    if args.command in ("list-dirs", "brief", "claim"):
+    if args.command in ("list-dirs", "brief", "claim", "publish"):
         return args.func(args)
     if not REPO_ROOT:
         raise SystemExit(
