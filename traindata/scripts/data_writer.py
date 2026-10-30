@@ -101,6 +101,9 @@ DEFAULT_DATA = os.path.join(REPO_ROOT, "data") if REPO_ROOT else None
 CHUNK_RE = re.compile(r"^chunk_(\d{4,})(?:_(\d{4,}))?\.(jsonl|yaml|yml)$")
 # Allocation names in the round manifest are stems (no extension).
 CHUNK_STEM_RE = re.compile(r"^chunk_(\d{4,})(?:_(\d{4,}))?$")
+# Parallel authoring is encouraged, but the main agent must validate every chunk
+# itself; beyond this the review queue, not generation, becomes the bottleneck.
+MAX_CONCURRENT_CHUNKS = 8
 ROUND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 TEMP_RE = re.compile(r"(^\.tmp-|\.tmp$|\.bak$|\.orig$|\.rej$|~\$?$|\.swp$|\.pyc$|^\.DS_Store$|^__pycache__$)")
 ALLOWED_ROOT_FILES = {"taxonomy.json", "ruhui_soft_all.jsonl", "ruhui_soft_card.md"}
@@ -377,6 +380,8 @@ def cmd_allocate(args):
     round_id = args.round or f"r-{datetime.datetime.now().strftime('%Y%m%dT%H%M%S')}-{os.urandom(3).hex()}"
     if not ROUND_RE.match(round_id):
         raise SystemExit(f"非法 round id: {round_id!r}（只用字母数字 . _ -）")
+    if args.count < 1:
+        raise SystemExit("--count 必须 >= 1（它数的是 chunk 槽位，不是 case）")
 
     with _lock(data_dir):
         manifest = load_round(data_dir, round_id)
@@ -387,6 +392,17 @@ def cmd_allocate(args):
                 "baseline": baseline_chunks(data_dir),
                 "allocations": [],
             }
+        # The cap is per round, not per call: repeated `allocate --round <id>`
+        # would otherwise stack up unlimited parallel slots. Parallel authoring
+        # is encouraged, but the main agent has to write and gate every chunk,
+        # and past the cap that review queue is what fails the round.
+        existing = len(manifest["allocations"])
+        if existing + args.count > MAX_CONCURRENT_CHUNKS:
+            raise SystemExit(
+                f"round {round_id} 已有 {existing} 个槽位，再加 {args.count} 个会超过上限 "
+                f"{MAX_CONCURRENT_CHUNKS}。并行子代理最多 8 个：每个 chunk 都要由主代理 "
+                "write 并跑两个 gate，再多就来不及逐个验证，整轮会失败。"
+                f"请分轮处理（新开一个 round）。")
         # Record which taxonomy this round was authored against. Without it a
         # later taxonomy edit silently invalidates already-merged chunks: the
         # case carries labels for the question set of its own version, not of
@@ -969,6 +985,8 @@ BRIEF = """\
   1. allocate --count 1 --email-manifest <path> --salted-prompt <path>
        --count 是 chunk 槽位数，不是 case 数；一个 pilot chunk 用 --count 1。
        一个 chunk 的全部 case 写进同一个 YAML；多分配的槽位保持 pending、不会被 merge。
+       并行时用 --count <子代理数>，最多 8：每轮（round）的槽位总数硬上限 8，
+       因为每个 chunk 都要由主代理 write 并跑两个 gate，再多就验证不过来。
   2. 写 YAML（一个 chunk 一个文件，不要写 jsonl、不要写别的路径）
   3. 先过一遍网关（YAML 可直接被读取；预检不要带 --require-salt，salt 章还没盖）：
        validate_and_integrate.py --check <yaml> --taxonomy data/taxonomy.json
