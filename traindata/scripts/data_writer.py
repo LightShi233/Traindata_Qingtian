@@ -99,6 +99,8 @@ REPO_ROOT = _find_repo_root(HERE)
 DEFAULT_DATA = os.path.join(REPO_ROOT, "data") if REPO_ROOT else None
 
 CHUNK_RE = re.compile(r"^chunk_(\d{4,})(?:_(\d{4,}))?\.(jsonl|yaml|yml)$")
+# Allocation names in the round manifest are stems (no extension).
+CHUNK_STEM_RE = re.compile(r"^chunk_(\d{4,})(?:_(\d{4,}))?$")
 ROUND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 TEMP_RE = re.compile(r"(^\.tmp-|\.tmp$|\.bak$|\.orig$|\.rej$|~\$?$|\.swp$|\.pyc$|^\.DS_Store$|^__pycache__$)")
 ALLOWED_ROOT_FILES = {"taxonomy.json", "ruhui_soft_all.jsonl", "ruhui_soft_card.md"}
@@ -325,10 +327,30 @@ def all_allocated_numbers(data_dir):
         except (OSError, json.JSONDecodeError):
             continue
         for allocation in manifest.get("allocations", []):
-            match = CHUNK_RE.match(allocation.get("name", ""))
+            match = CHUNK_STEM_RE.match(allocation.get("name", ""))
             if match:
                 numbers.add(int(match.group(1)))
     return numbers
+
+
+def all_allocated_stems(data_dir):
+    """Full chunk identities (``NNNN`` or ``NNNN_runsuffix``) known to any round."""
+    stems = set()
+    for path in glob.glob(os.path.join(data_dir, "rounds", "*.json")):
+        try:
+            with open(path, encoding="utf-8-sig") as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        for allocation in manifest.get("allocations", []):
+            match = CHUNK_STEM_RE.match(allocation.get("name", ""))
+            if match:
+                stems.add(chunk_stem(match))
+    return stems
+
+
+def chunk_stem(match):
+    return f"{match.group(1)}_{match.group(2)}" if match.group(2) else match.group(1)
 
 
 def baseline_chunks(data_dir):
@@ -1101,7 +1123,11 @@ def cmd_check(args):
                 add("FAIL", "script", f"仓库根目录出现脚本（禁止模型自造生成器）: {name}")
 
     # chunk allocation accounting
-    file_numbers = {}
+    # Identity is the FULL name, not the base number: two concurrent CI rounds
+    # legitimately hold chunk_0013_40904399864 and chunk_0013_40957388105 —
+    # the run suffix is what keeps them apart. Grouping by base number alone
+    # reported every such pair as a duplicate and dead-ended the workflow.
+    file_ids = {}
     for sub in ("chunks", "inbox"):
         directory = os.path.join(data_dir, sub)
         if not os.path.isdir(directory):
@@ -1109,13 +1135,14 @@ def cmd_check(args):
         for name in sorted(os.listdir(directory)):
             match = CHUNK_RE.match(name)
             if match:
-                file_numbers.setdefault(int(match.group(1)), []).append(f"{sub}/{name}")
-    for number, names in sorted(file_numbers.items()):
-        suffixes = [os.path.splitext(n)[1] for n in names]
-        if suffixes.count(".yaml") + suffixes.count(".yml") > 1:
-            add("FAIL", "naming", f"chunk_{number:04d} 有多个 YAML: {names}")
+                stem = f"{match.group(1)}_{match.group(2)}" if match.group(2) else match.group(1)
+                file_ids.setdefault(stem, []).append(f"{sub}/{name}")
+    for stem, names in sorted(file_ids.items()):
+        exts = [os.path.splitext(n)[1] for n in names]
+        if exts.count(".yaml") + exts.count(".yml") > 1:
+            add("FAIL", "naming", f"chunk {stem} 有多个 YAML: {names}")
 
-    allocated_any = all_allocated_numbers(data_dir)
+    allocated_any = all_allocated_stems(data_dir)
     if args.round:
         if not ROUND_RE.match(args.round):
             raise SystemExit(f"非法 round id: {args.round!r}")
@@ -1138,7 +1165,7 @@ def cmd_check(args):
             allocated_rel.add(allocation["jsonl"])
             allocated_rel.add(allocation["yaml"])
         allowed = baseline | allocated_rel
-        for names in file_numbers.values():
+        for names in file_ids.values():
             for rel in names:
                 if rel not in allowed:
                     add("FAIL", "extra-chunk",
@@ -1147,8 +1174,8 @@ def cmd_check(args):
             if allocation.get("status") == "written" and not os.path.exists(_abs(data_dir, allocation["jsonl"])):
                 add("FAIL", "missing", f"清单标记 written 但文件缺失: {allocation['jsonl']}")
     else:
-        for number, names in sorted(file_numbers.items()):
-            if number not in allocated_any:
+        for stem, names in sorted(file_ids.items()):
+            if stem not in allocated_any:
                 add("WARN", "unregistered", f"chunk 未被任何 round 登记（历史数据？）: {names}")
 
     if args.strict:
@@ -1165,8 +1192,8 @@ def cmd_check(args):
                           "findings": findings,
                           "verdict": "fail" if fails else "pass"}, indent=2, ensure_ascii=False))
     else:
-        print(f"data_writer check: {len(file_numbers)} chunk 编号, "
-              f"{sum(len(v) for v in file_numbers.values())} 个 chunk 文件")
+        print(f"data_writer check: {len(file_ids)} chunk 身份, "
+              f"{sum(len(v) for v in file_ids.values())} 个 chunk 文件")
         for finding in findings:
             print(f"  {finding['level']:4} [{finding['code']}] {finding['message']}")
         if fails:
