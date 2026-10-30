@@ -1,0 +1,167 @@
+{
+  "round": "r-20261030T033949-851bcf",
+  "created_at": "2026-10-30T03:39:49+00:00",
+  "baseline": [
+    "chunks/chunk_0001.jsonl",
+    "chunks/chunk_0002.jsonl",
+    "chunks/chunk_0004.jsonl",
+    "chunks/chunk_0005.jsonl",
+    "chunks/chunk_0006.jsonl",
+    "chunks/chunk_0007.jsonl",
+    "chunks/chunk_0008.jsonl",
+    "chunks/chunk_0009_40877273830.jsonl",
+    "chunks/chunk_0011_40884889843.jsonl",
+    "chunks/chunk_0012_40891905371.jsonl",
+    "chunks/chunk_0013.jsonl",
+    "chunks/chunk_0013_40904399864.jsonl",
+    "chunks/chunk_0013_40957388105.jsonl",
+    "chunks/chunk_0014_40990386477.jsonl",
+    "chunks/chunk_0015.jsonl",
+    "chunks/chunk_0015_40985138015.jsonl",
+    "chunks/chunk_0015_40990386477.jsonl",
+    "chunks/chunk_0016_40990386477.jsonl",
+    "chunks/chunk_0017_40990386477.jsonl",
+    "chunks/chunk_0018_40990386477.jsonl",
+    "chunks/chunk_0019_40990386477.jsonl",
+    "inbox/chunk_0001.yaml",
+    "inbox/chunk_0002.yaml",
+    "inbox/chunk_0004.yaml",
+    "inbox/chunk_0005.yaml",
+    "inbox/chunk_0006.yaml",
+    "inbox/chunk_0007.yaml",
+    "inbox/chunk_0008.yaml",
+    "inbox/chunk_0009_40877273830.yaml",
+    "inbox/chunk_0011_40884889843.yaml",
+    "inbox/chunk_0012_40891905371.yaml",
+    "inbox/chunk_0013.yaml",
+    "inbox/chunk_0013_40904399864.yaml",
+    "inbox/chunk_0013_40957388105.yaml",
+    "inbox/chunk_0014_40990386477.yaml",
+    "inbox/chunk_0015.yaml",
+    "inbox/chunk_0015_40985138015.yaml",
+    "inbox/chunk_0015_40990386477.yaml",
+    "inbox/chunk_0016_40990386477.yaml",
+    "inbox/chunk_0017_40990386477.yaml",
+    "inbox/chunk_0018_40990386477.yaml",
+    "inbox/chunk_0019_40990386477.yaml"
+  ],
+  "allocations": [
+    {
+      "name": "chunk_0020",
+      "base": "chunk_0020",
+      "run_suffix": null,
+      "yaml": "inbox/chunk_0020.yaml",
+      "jsonl": "chunks/chunk_0020.jsonl",
+      "status": "written",
+      "worker": "w1",
+      "allocated_at": "2026-10-30T03:39:49+00:00",
+      "claimed_by": "w1",
+      "claimed_at": "2026-10-30T03:41:10+00:00",
+      "written_at": "2026-10-30T03:46:21+00:00",
+      "sha256": "86a7cc1522b6eda8cfcfb2e91bd1045727a1dba197c36d85b48b5b4fba49903b",
+      "cases": 10
+    },
+    {
+      "name": "chunk_0021",
+      "base": "chunk_0021",
+      "run_suffix": null,
+      "yaml": "inbox/chunk_0021.yaml",
+      "jsonl": "chunks/chunk_0021.jsonl",
+      "status": "written",
+      "worker": "w2",
+      "allocated_at": "2026-10-30T03:39:49+00:00",
+      "claimed_by": "w2",
+      "claimed_at": "2026-10-30T03:41:10+00:00",
+      "written_at": "2026-10-30T03:46:21+00:00",
+      "sha256": "5fe4f28c9209a438b22442b9a1db8d9e58b6162a566ba6ee329d80c94cb72821",
+      "cases": 10
+    },
+    {
+      "name": "chunk_0022",
+      "base": "chunk_0022",
+      "run_suffix": null,
+      "yaml": "inbox/chunk_0022.yaml",
+      "jsonl": "chunks/chunk_0022.jsonl",
+      "status": "written",
+      "worker": "w3",
+      "allocated_at": "2026-10-30T03:39:49+00:00",
+      "claimed_by": "w3",
+      "claimed_at": "2026-10-30T03:41:15+00:00",
+      "written_at": "2026-10-30T03:46:21+00:00",
+      "sha256": "aa7a759fa7f398c33bbee4e2dd8b95317277d79baa7ebac99281b448354ad225",
+      "cases": 10
+    },
+    {
+      "name": "chunk_0023",
+      "base": "chunk_0023",
+      "run_suffix": null,
+      "yaml": "inbox/chunk_0023.yaml",
+      "jsonl": "chunks/chunk_0023.jsonl",
+      "status": "written",
+      "worker": "w4",
+      "allocated_at": "2026-10-30T03:39:49+00:00",
+      "claimed_by": "w4",
+      "claimed_at": "2026-10-30T03:41:41+00:00",
+      "written_at": "2026-10-30T03:46:21+00:00",
+      "sha256": "6f6cf5507b3cca6d3354c4c31e902bd3eaafa2223b0eca56b39009919d42afaf",
+      "cases": 10
+    },
+    {
+      "name": "chunk_0024",
+      "base": "chunk_0024",
+      "run_suffix": null,
+      "yaml": "inbox/chunk_0024.yaml",
+      "jsonl": "chunks/chunk_0024.jsonl",
+      "status": "written",
+      "worker": "w5",
+      "allocated_at": "2026-10-30T03:39:49+00:00",
+      "claimed_by": "w5",
+      "claimed_at": "2026-10-30T03:41:10+00:00",
+      "written_at": "2026-10-30T03:46:21+00:00",
+      "sha256": "be28482700ce1e83f2effcc2851a9510f2f79538c07305851745a48b02778296",
+      "cases": 10
+    }
+  ],
+  "taxonomy_version": "ruhui-triage-v3",
+  "budget_hours": 0.5,
+  "salted_prompt": "work/salted_prompt.txt",
+  "salted_prompt_sha256": "d629cf2ba9fdc0bee6ea885b92cd3135a626372b59c13160feb8959197e762ec",
+  "salted_prompt_registered_at": "2026-10-30T03:39:49+00:00",
+  "email_batch": [
+    "gpsops@sidemirror53.com",
+    "qianoun@sidemirror53.com",
+    "tanaisabogan@yahoo.fi",
+    "workplace.safety@yahoo.fi",
+    "o.fiore@lobbyist.com",
+    "pharmacy10@lobbyist.com"
+  ],
+  "email_pairs": [
+    {
+      "domain": "sidemirror53.com",
+      "tier": "disposable",
+      "addresses": [
+        "gpsops@sidemirror53.com",
+        "qianoun@sidemirror53.com"
+      ]
+    },
+    {
+      "domain": "yahoo.fi",
+      "tier": "freemail",
+      "addresses": [
+        "tanaisabogan@yahoo.fi",
+        "workplace.safety@yahoo.fi"
+      ]
+    },
+    {
+      "domain": "lobbyist.com",
+      "tier": "freemail",
+      "addresses": [
+        "o.fiore@lobbyist.com",
+        "pharmacy10@lobbyist.com"
+      ]
+    }
+  ],
+  "email_manifest_source": "work/emails.json",
+  "email_batch_registered_at": "2026-10-30T03:39:49+00:00",
+  "updated_at": "2026-10-30T03:46:21+00:00"
+}
