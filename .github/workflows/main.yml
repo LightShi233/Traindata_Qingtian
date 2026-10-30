@@ -123,14 +123,25 @@ jobs:
                traj_id / payload_span 并自己重跑 write 与两个 gate，开得再多
                主代理反而来不及验证，最后整轮通不过。
                做法：
-                 a) 主代理一次性 allocate --count <子代理数量>，把每个子代理
-                    分配到哪个 chunk 名写在派发指令里；
-                 b) 每个子代理只负责写自己那一个 YAML（8–12 个 case），
+                 a) 主代理一次性 allocate --count <子代理数量> --workers <名字1> <名字2> …
+                    （人数与 --count 一致）。它会把每个 chunk 分给谁打印成一张
+                    分派表，并写进 round 清单；
+                 b) chunk 名带本轮 CI run 号后缀，形如 chunk_0007_40840653996。
+                    子代理必须**逐字复制**分派表里自己那一行的 chunk 名和 YAML 路径，
+                    不得自己起名、不得省略后缀、不得改用 chunk_0007.yaml 之类的写法；
+                    抄错一位就会写进别人的槽位；
+                 c) 子代理动笔前先认领自己的槽位：
+                      data_writer.py claim --round <id> --name <分派表里的名字> --worker <自己>
+                    同一个槽位被第二个子代理认领会直接拒绝。不做这步的话，
+                    两个子代理都「写自己的 chunk」时，后写的 YAML 会静默覆盖先写的，
+                    其中一份产出就此消失且没有任何报错；
+                 d) 每个子代理只写自己那一个 YAML（8–12 个 case），
                     不同子代理之间必须使用不同的 scenario_family / entity_family /
                     id_style / thought_style / injection_surface，否则整轮会因
                     多样性集中被 audit 拒绝；
-                 c) 子代理全部返回后，主代理按顺序逐个 write → gate，
-                    任何一个失败就单独修那一个，不要放弃其它 chunk。
+                 e) 子代理全部返回后，主代理按分派表顺序逐个
+                    write --round <id> --name <名字> --worker <名字>，再跑两个 gate；
+                    任何一个失败只修那一个，不要放弃其它 chunk。
 
             4. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
                严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
