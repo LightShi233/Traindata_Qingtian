@@ -99,7 +99,8 @@ they cannot be argued with and cannot be faked by `meta`:
   `split_manifest.json` (`group_by`).
 - **The residual is measured, not assumed.** `audit_shortcut.py` reports the
   surface AUC of a merged corpus. CI runs it after the gates and logs the number
-  without blocking: a per-round chunk is too small to threshold honestly.
+  without blocking: a per-round chunk is too small to threshold honestly, and
+  the number is a consistency measure rather than a verdict (see §5).
 
 **Wording rule.** The probe uses a **fixed, small feature set** (tool verbs,
 length, hedges, tool-call count, addresses, agent text volume). Say
@@ -127,9 +128,30 @@ work, because the error being learned is the spec's own error:
    `meta.corrects: <old traj_id>` (meta never reaches training). The superseded
    case stays in the corpus as history but must be **excluded from training** —
    otherwise both labels are trained on the same text.
-4. **Re-measure.** Run `audit_shortcut.py --corrected` over the corpus with the
-   map of old labels. Success is the follow-rate collapsing:
-   `follow_original` → `follow_corrected`.
+4. **Re-measure — but not with `follow_corrected`.** That number is
+   **self-fulfilling**: the probe is fitted on the corpus, so once the corpus
+   carries the corrected labels it learns them and agrees out of fold. When the
+   corpus is *not* corrected, `follow_corrected` is computed against the same
+   label as `follow_original` and the two are identical. The tool detects both
+   cases and prints `[NOT A SUCCESS CRITERION]`; do not report the number as
+   progress.
+
+   Two measurements are valid, and they answer different questions:
+   - **Label-flip sensitivity** (`--predictions-out` twice + `--compare`): the
+     same texts, two runs that differ only in their label source. The fraction
+     of predictions that flip is evidence that the decision is driven by the
+     label, not the text — a clean existence proof of the shortcut, because the
+     text is held fixed by construction.
+   - **AUC after correction**: expect it to *rise* (a reviewed corpus measured
+     0.821 → 0.859). Corrections are usually justified by exactly the features
+     the probe measures (a completed egress), so the corrected labels are more
+     surface-consistent, not less. AUC is a **label-surface consistency** number,
+     never a data-quality score; a rise is not a regression and a drop is not a
+     win.
+
+   What neither number shows is the thing that matters in deployment: whether
+   the model still fails when the surface feature and the truth disagree. That
+   needs a targeted probe set (surface-present, truth-absent), which is §5.
 
 This does not eliminate the shortcut. It compresses the gap between the shortcut
 and the truth toward zero, which is why it does not conflict with the ban on
@@ -137,12 +159,24 @@ claiming elimination in §5. It also does not replace the execution layer: a
 corrected corpus is still labelled from the plan for every case a human did not
 touch.
 
+**The uncertainty is already recoverable for these cases.** An adjudication
+record supplies a real difficulty tier, which is what a lowered primary is for:
+two reviewers agree on the flip → `0.90`; they directly conflict → `0.70`;
+arbitration records a genuine downgrade → `0.55`. Set `primary` on those cases
+and `meta.primary_basis` to the arbitration fact (`references/soft-labels.md`).
+This is the one situation where a non-constant primary is evidence-backed rather
+than invented, and it matters more than usual here: the consumer scores a
+strictly proper rule on the distribution, so a corpus of constant `0.9` trains
+uniform over-confidence and a fitted temperature cannot undo it.
+
 ## 5. What this cannot fix (and the honest claim)
 
-Lowering the probe's AUC does **not** prove the model learned the rule. It
-proves the *known surface features* are no longer separately predictive. A model
-can still be right for the wrong reason; only an intervention can show
-otherwise:
+The probe's AUC is **label-surface consistency**, not a quality score. Lowering
+it does **not** prove the model learned the rule — it proves the measured
+features are no longer separately predictive. Raising it does **not** mean the
+data got worse either; a correction pass usually raises it, because corrections
+are justified by the same features the probe sees. A model can still be right
+for the wrong reason; only an intervention can show otherwise:
 
 | missing capability | what it would take |
 | - | - |
@@ -224,11 +258,19 @@ reference `prepare_train_data.py`, not assumed:
 - **`qtype` is a conditioning input, not a loss weight.** The model adds
   `type_emb(qtype)` to the hidden states, and `proper_reward` uses `qtype` only
   to add the RPS term for `score`. There is **no per-qtype loss normalisation**
-  in the shipped code. The risk is therefore not in the model: it is whether the
-  private training loop averages per item (removing a head only removes items)
-  or per qtype group (removing one `choice` head re-weights the remaining heads
-  relative to `noul`/`score`). Check the loop, not the package.
-- **Calibration buckets are per `(qtype, option-count)`.** Dropping `mechanism`
-  leaves the `choice` buckets fitted on `harm_kind` alone — the weights are
-  unchanged, but the population they are fitted on changes, so refit
-  temperatures after any head change.
+  in the shipped code. Whether removing a head re-weights the rest depends on
+  the training loop, which is not in the wheel; the loop need not be readable to
+  answer it — **run two batches and compare the loss**:
+  `A = 10 noul + 10 choice`, `B = 10 noul + 20 choice` with identical items.
+  A different loss means per-item averaging (dropping a head only removes its
+  items). An unchanged loss means per-qtype grouping (dropping one `choice`
+  head re-weights the remaining heads against `noul`/`score`).
+- **Calibration buckets are per `(qtype, option-count)`.** The heads split as
+  `mechanism (choice, 5)`, `harm_kind (choice, 7)`, `severity (score, 4)`,
+  `grounding (score, 4)`. So dropping `mechanism` does **not** change
+  `harm_kind`'s fitted population — different `k`, different bucket, they never
+  shared one. The truly shared bucket is `severity` + `grounding`; refit it
+  after any change to either. If those heads become conditional on
+  `is_violation` (§6), add the condition to the bucket key: on clean cases
+  `severity` is constant 0, so merging the two conditional populations into one
+  temperature fits a degenerate half and inflates the variance of the estimate.

@@ -48,6 +48,7 @@ Usage
 """
 import argparse
 import glob
+import hashlib
 import json
 import math
 import os
@@ -233,46 +234,113 @@ def cv_scores(X, y, folds):
     return scores, accuracy, folds
 
 
-def load_corrected(path):
-    """traj_id -> the label this case carried *before* a human corrected it.
+def text_key(case):
+    """Stable identity of a trajectory, independent of its id.
 
-    Accepts a JSON object ``{"<traj_id>": true|false}`` or JSONL rows with
-    ``traj_id`` and ``original_safe``. The map is what turns this probe into the
-    measurement that matters after a correction pass: does the surface model
-    still follow the old (wrong) label, or the corrected one?
+    Predictions are matched by this key, not by ``traj_id``: a correction pass is
+    append-only, so the corrected copy of a case carries a new id while its text
+    is byte-identical. Matching on the text is what makes the before/after
+    comparison measure "same text, different label" instead of "different row".
+    """
+    return hashlib.sha256(
+        json.dumps(case.get("turns"), ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+
+
+def load_corrected(path):
+    """Map text key / traj_id -> the label before and after correction.
+
+    Accepted shapes:
+      ``{"<key>": true}``                              original only
+      ``{"<key>": {"original_safe": .., "corrected_safe": ..}}``
+      JSONL rows with ``traj_id`` or ``text_sha256`` plus the same fields.
+    ``corrected_safe`` is optional; without it the corpus's current label is
+    used and the report says so, because that number cannot distinguish
+    "correction worked" from "the probe was trained on the correction".
     """
     with open(path, encoding="utf-8-sig") as fh:
         text = fh.read()
-    out = {}
+    rows = []
     stripped = text.lstrip()
     if stripped.startswith("{"):
         doc = json.loads(stripped)
-        if "traj_id" in doc:  # a single row
-            out[str(doc["traj_id"])] = bool(doc["original_safe"])
-            return out
-        return {str(k): bool(v) for k, v in doc.items()}
-    for line in text.splitlines():
-        if not line.strip():
+        if "traj_id" in doc or "text_sha256" in doc:
+            rows = [doc]
+        else:
+            rows = [{"key": k, "value": v} for k, v in doc.items()]
+    else:
+        rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+
+    out = {}
+
+    def put(key, original, corrected):
+        if key:
+            out[str(key)] = {"original_safe": bool(original),
+                             "corrected_safe": None if corrected is None else bool(corrected)}
+
+    for row in rows:
+        if "key" in row:  # {"<id>": true} form
+            value = row["value"]
+            if isinstance(value, dict):
+                put(row["key"], value.get("original_safe"), value.get("corrected_safe"))
+            else:
+                put(row["key"], value, None)
             continue
-        row = json.loads(line)
-        out[str(row["traj_id"])] = bool(row["original_safe"])
+        key = row.get("text_sha256") or row.get("traj_id")
+        if not key or "original_safe" not in row:
+            raise KeyError("修正集每行需要 text_sha256/traj_id 和 original_safe")
+        put(key, row["original_safe"], row.get("corrected_safe"))
     return out
 
 
+def _lookup(corrected, case):
+    return corrected.get(text_key(case)) or corrected.get(case.get("traj_id"))
+
+
 def follow_rates(labelled, oof, corrected):
-    """Agreement of the surface prediction with the old vs the corrected label."""
-    idx = {c.get("traj_id"): i for i, (_, c) in enumerate(labelled)}
-    pairs = [(tid, i) for tid, i in idx.items() if tid in corrected and not math.isnan(oof[i])]
-    if not pairs:
-        return None
-    old_hits = new_hits = 0
-    for tid, i in pairs:
+    """Agreement of the surface prediction with the old vs the corrected label.
+
+    ``follow_corrected`` alone is **not** evidence that the shortcut channel was
+    cut: the probe is fitted on the corpus, so if the corpus carries the
+    corrected labels it learns them and then agrees with them out of fold. The
+    report therefore says where the corrected value came from, and the real
+    before/after evidence is the flip rate between two runs at fixed text
+    (``--predictions-out`` + ``--compare``).
+    """
+    rows = []
+    for i, (_, case) in enumerate(labelled):
+        if math.isnan(oof[i]):
+            continue
+        entry = _lookup(corrected, case)
+        if entry is None:
+            continue
         pred = 1 if oof[i] >= 0.5 else 0
-        old = 0 if corrected[tid] else 1
-        old_hits += pred == old
-        new_hits += pred == (0 if labelled[i][1].get("safe") is True else 1)
-    n = len(pairs)
-    return {"cases": n, "follow_original": old_hits / n, "follow_corrected": new_hits / n}
+        current = 0 if case.get("safe") is True else 1
+        corrected_value = entry.get("corrected_safe")
+        rows.append({
+            "pred": pred,
+            "old": 0 if entry["original_safe"] else 1,
+            "new": current if corrected_value is None else (0 if corrected_value else 1),
+            "new_from_corpus": corrected_value is None,
+            "corpus_equals_original": current == (0 if entry["original_safe"] else 1),
+        })
+    if not rows:
+        return None
+    n = len(rows)
+    follow_original = sum(r["pred"] == r["old"] for r in rows) / n
+    follow_corrected = sum(r["pred"] == r["new"] for r in rows) / n
+    # Self-fulfilling when the compared label is the one the probe trained on:
+    # either the map omitted the corrected value, or the corpus still carries
+    # the original label (then the two rates are complements by construction).
+    from_corpus = all(r["new_from_corpus"] for r in rows)
+    same = all(r["corpus_equals_original"] for r in rows)
+    return {
+        "cases": n,
+        "follow_original": follow_original,
+        "follow_corrected": follow_corrected,
+        "corrected_label_source": "corpus" if from_corpus else "map",
+        "self_fulfilling": bool(from_corpus or same),
+    }
 
 
 def main():
@@ -288,9 +356,14 @@ def main():
     ap.add_argument("--min-cases", type=int, default=40,
                     help="少于该样本数时不据阈值判失败（AUC 标准误太大）")
     ap.add_argument("--corrected", default=None,
-                    help="修正集映射（JSON 对象或 JSONL：traj_id -> 修正前的 safe）。"
-                         "给出后额外报告探针对旧标签/新标签的跟随率——修正标签是切断"
-                         "偏差传递最便宜的手段（见 references/label-provenance.md）")
+                    help="修正集映射（JSON/JSONL：text_sha256 或 traj_id → original_safe "
+                         "[/ corrected_safe]）。给出后报告探针对旧标签/新标签的跟随率")
+    ap.add_argument("--predictions-out", default=None,
+                    help="把每个 case 的留出预测写到 JSON（按 text_sha256 索引）。"
+                         "与 --compare 配合，测「文本不变、只换标签」时预测翻转多少")
+    ap.add_argument("--compare", default=None,
+                    help="上一次运行的 --predictions-out 文件；报告共有文本上的预测翻转率。"
+                         "两次运行若只有标签来源不同，这个翻转率就是标签翻转敏感率")
     args = ap.parse_args()
 
     deadline = Deadline(args.timeout)
@@ -359,6 +432,8 @@ def main():
     elif verdict_auc >= 0.70:
         verdict = "WEAK"
     print(f"verdict: {verdict}")
+    print("  注：AUC/verdict 衡量标签与已测表面特征的一致性，不是数据质量分；"
+          "修正标签后上升是预期内的（label-provenance.md §4），不要当成退步")
     if verdict != "OK":
         top = sorted(per_feature.items(), key=lambda kv: -abs(kv[1] - 0.5))[:2]
         print("  最该先交叉映射的特征: " + ", ".join(f"{k} (AUC {v:.3f})" for k, v in top))
@@ -366,6 +441,37 @@ def main():
               "safe=false 里；见 references/label-provenance.md")
     if len(y) < 30:
         print(f"  [note] 只有 {len(y)} 个 case，AUC 标准误很大；这个数只当方向看")
+
+    preds = {text_key(c): (1 if oof[i] >= 0.5 else 0)
+             for i, (_, c) in enumerate(labelled) if not math.isnan(oof[i])}
+    if args.predictions_out:
+        atomic_write_text(args.predictions_out,
+                          json.dumps(preds, indent=2, sort_keys=True) + "\n")
+        print(f"predictions -> {args.predictions_out} ({len(preds)} texts)")
+
+    compare_report = None
+    if args.compare:
+        try:
+            with open(args.compare, encoding="utf-8") as fh:
+                previous = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"FAIL: 无法读取 --compare {args.compare}: {exc}")
+            return 2
+        shared = sorted(set(previous) & set(preds))
+        if not shared:
+            print("compare: 两次运行没有共同文本（按 text_sha256 匹配）；"
+                  "请确认两次用的是同一批轨迹")
+        else:
+            flips = sum(previous[h] != preds[h] for h in shared)
+            compare_report = {
+                "shared_texts": len(shared),
+                "flips": flips,
+                "label_flip_sensitivity": flips / len(shared),
+            }
+            print(f"compare: {len(shared)} 条相同文本，{flips} 条预测翻转 "
+                  f"({flips / len(shared):.0%})")
+            print("  两次运行若只有标签来源不同，这个翻转率就是标签翻转敏感率："
+                  "文本没动、预测却跟着标签走，说明决策是标签驱动的（捷径存在）")
 
     corrected_report = None
     if args.corrected:
@@ -376,15 +482,20 @@ def main():
             return 2
         rates = follow_rates(labelled, oof, corrected)
         if rates is None:
-            print(f"corrected set: 0 个 case 能在语料里匹配到 "
-                  f"（{len(corrected)} 个 id）；映射的 key 必须是语料里的 traj_id")
+            print(f"corrected set: 0 个 case 能在语料里匹配到（{len(corrected)} 个 key）；"
+                  "映射的 key 必须是 text_sha256 或语料里的 traj_id")
         else:
-            print(f"corrected set: {rates['cases']} cases")
+            print(f"corrected set: {rates['cases']} cases "
+                  f"(corrected label from {rates['corrected_label_source']})")
             print(f"  probe follows the ORIGINAL label:  {rates['follow_original']:.0%}")
             print(f"  probe follows the CORRECTED label: {rates['follow_corrected']:.0%}")
-            if rates["follow_original"] > rates["follow_corrected"]:
-                print("  结论：在这批已修正样本上，表面探针仍然跟着旧标签走——"
-                      "偏差传递通道没有被切断，修正集还不够（见 label-provenance.md §4）")
+            if rates["self_fulfilling"]:
+                print("  [NOT A SUCCESS CRITERION] 这里的 corrected 标签就是语料当前标签，"
+                      "探针在训练时已经学过它；follow_corrected 升高只说明语料改了、"
+                      "不说明通道切断。要看 --predictions-out 两次运行的翻转率")
+            elif rates["follow_original"] > rates["follow_corrected"]:
+                print("  探针仍跟随旧标签的比例更高：这批文本的表面特征与旧判定一致，"
+                      "修正没有改变可学的信号")
         corrected_report = rates
 
     report = {
@@ -405,6 +516,7 @@ def main():
         "folds": folds,
         "verdict": verdict,
         "corrected": corrected_report,
+        "compare": compare_report,
         "files": [os.path.basename(p) for p in paths],
     }
     if args.json:

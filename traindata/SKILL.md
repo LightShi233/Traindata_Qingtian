@@ -304,14 +304,19 @@ Tips that make this work in practice:
   accuracy) and how many of its measured features are discriminative. Report it
   that way — "3 of 8 measured features are discriminative" — never as "shortcuts
   measured/eliminated": the feature set is fixed and small, and a low AUC
-  disproves only those features. See `references/label-provenance.md`.
+  disproves only those features. The AUC is **label-surface consistency**, not a
+  quality score: a correction pass usually raises it. See
+  `references/label-provenance.md`.
 - **Correction is a first-class path.** A human-confirmed label fix (recall from
   a mechanical signal, decision by a person) is cheaper than rebuilding the
   pipeline and attacks the same channel: the surface model learns the spec's
   error. Corrections are append-only — new `traj_id`s, `meta.corrects: <old id>`
-  — and the superseded case is excluded from training. Verify with
-  `audit_shortcut.py --corrected <map>`: success is `follow_original` collapsing
-  toward `follow_corrected`.
+  — and the superseded case is excluded from training. Do **not** report
+  `follow_corrected` as success (the probe is trained on it, so it is
+  self-fulfilling); use label-flip sensitivity at fixed text
+  (`--predictions-out` twice + `--compare`). Set a lowered `primary` on the
+  contested cases from the adjudication record — that is evidence-backed
+  uncertainty, and the consumer trains on the distribution.
 - **Ledger the payloads and dedup early.** Emails already have a corpus-wide
   `--ledger`; give payloads the same treatment: keep the assigned `payload_span`
   strings centrally so no two chunks reuse one, and run the cross-chunk dedup of
@@ -409,7 +414,8 @@ then excluded). "Warm-up" with no stop point is just mixing; see
 The card must not claim shortcut elimination. The honest line is: label source
 is the generation plan for every case not human-corrected; the measured feature
 set is reported with its discriminative count; the correction pass, if any, is
-reported with its follow-rate.
+reported with its label-flip sensitivity, not with `follow_corrected` (that
+number is trained on the correction and cannot fail).
 
 ## Record format and authoring
 
@@ -434,7 +440,12 @@ read it before your first `write`. The hard rules below still apply.
 2. **Soft, never one-hot.** One-hot means all probability on a single option
    (`1.0` there, `0.0` everywhere else). Instead: primary `0.9`, remainder `0.1`
    spread evenly, always normalized. Ambiguity is expressed by lowering the
-   primary below `0.9`, never by writing a hard 1.0.
+   primary below `0.9`, never by writing a hard 1.0. A case may set `primary`
+   (must be `> 0.5` and `<= 0.9`) when an adjudication record shows real
+   disagreement, and must then carry `meta.primary_basis` naming the evidence.
+   Do not lower it by default: the consumer trains on the distribution with a
+   proper scoring rule, so a corpus of constant `0.9` teaches uniform
+   over-confidence that temperature scaling cannot undo.
 3. **`label` must equal the argmax** of `probabilities`.
 4. **Validate, then audit, before you accumulate.** Unvalidated data is not data,
    and schema-valid data that teaches a shortcut is worse than none. Both

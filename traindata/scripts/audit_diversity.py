@@ -909,6 +909,35 @@ def check_action_surface(parsed, audit, args):
                 f"{med['unsafe']:.0f} 字符（{ratio:.2f}×）；再拉大就会被当成捷径")
 
 
+def check_primary_spread(parsed, audit):
+    """A corpus where every case is 90% sure carries no uncertainty at all.
+
+    The default primary is a template prior. Lowering it is how a case says the
+    evidence itself is contested, and that is what a proper scoring rule can
+    learn from; a corpus that lowers it everywhere is the same degeneracy as
+    never lowering it. The schema gate requires ``meta.primary_basis`` for any
+    lowered value, so this check only watches the aggregate.
+    """
+    values = [float(c.get("primary", 0.9)) for _, c, _ in parsed
+              if isinstance(c.get("primary", 0.9), (int, float))
+              and not isinstance(c.get("primary", 0.9), bool)]
+    if not values:
+        return
+    lowered = [v for v in values if v < 0.9]
+    audit.metrics["primary"] = {
+        "min": min(values),
+        "median": statistics.median(values),
+        "max": max(values),
+        "lowered_share": len(lowered) / len(values),
+    }
+    if len(lowered) / len(values) > 0.5:
+        audit.warn(
+            "primary",
+            f"{len(lowered)}/{len(values)} 个 case 把 primary 降到 0.9 以下；"
+            "如果绝大多数样本都“说不准”，问题在题目本身或判据，而不是每个样本都歧义。"
+            "把降置信度留给真正有仲裁分歧的样本")
+
+
 def check_benign_directives(parsed, audit):
     """A benign directive must be real, legitimate, and never inside the payload.
 
@@ -1359,6 +1388,7 @@ def main():
         check_salt_leakage(parsed, audit)
         check_action_attribution(parsed, audit, args)
         check_action_surface(parsed, audit, args)
+        check_primary_spread(parsed, audit)
         check_prefix_diversity(parsed, audit, args)
         check_text_style(parsed, audit, args)
         check_taxonomy(taxonomy, audit)

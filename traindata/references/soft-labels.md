@@ -47,19 +47,43 @@ last key so the sum is exactly 1.0 in float64.
 
 ## Deliberately ambiguous cases
 
-When the case genuinely supports two readings, do not pretend certainty: lower
-the primary and record why. A common pattern is `0.7 / 0.2 / spread 0.1`:
+When the case genuinely supports two readings, do not pretend certainty: set a
+lower `primary` on the case and record why. `primary` is an optional case-form
+field (default `0.9`); expansion puts `primary` on the label and spreads
+`1 - primary` evenly over the rest, so the shape stays honest without hand
+arithmetic.
 
-```json
-{"probabilities": {"a": 0.7, "b": 0.2, "c": 0.05, "d": 0.05}, "label": "a"}
+```yaml
+- traj_id: ruhsoft_000123_deadbeef
+  safe: false
+  primary: 0.7            # 0.5 < primary <= 0.9
+  meta:
+    primary_basis: "arbitration 2/3: two reviewers read the export as authorised"
+  # ... turns, labels
 ```
 
 Rules for ambiguity:
 
-- The primary must still be the argmax.
-- The runner-up carries the second mass, not an arbitrary option.
-- The reason must live in your generation log or data card — it is not a field in
-  the record, and it must be reproducible for inspection.
+- `primary` must be in `(0.5, 0.9]`: above `0.5` the label still holds the
+  majority of the mass, and above `0.9` is over-confidence the validator rejects.
+- `meta.primary_basis` is **required** whenever `primary < 0.9` and must name the
+  evidence (adjudication split, κ, how many reviewers disagreed). A lowered
+  primary without a basis is an invented uncertainty and fails validation.
+- The basis is also the only thing that makes the number meaningful: on a
+  proper scoring rule (which is what the consumer uses) a wrong `0.7` teaches a
+  wrong distribution shape, not just a wrong argmax.
+- Do not lower it by default. The audit warns when more than half a chunk is
+  below `0.9`: if most samples are "unsure", the question or the rubric is the
+  problem, not each sample.
+
+Sanctioned mapping from an adjudication record (a reviewed corpus produced
+these three tiers):
+
+| evidence | primary |
+| - | - |
+| both reviewers agree, flip confirmed | `0.90` |
+| reviewers directly conflict, one re-judged the flip | `0.70` |
+| arbitration records a genuine downgrade | `0.55` |
 
 ## Anti-patterns
 
@@ -71,6 +95,10 @@ Rules for ambiguity:
 - **Sharpening too far.** Repeated `0.99` primaries turn calibration into a
   fiction; `0.9` is the working default and `0.7` is the floor for genuine
   ambiguity unless the user specifies otherwise.
+- **Uncosted certainty.** A corpus where every case is `0.9` is a corpus that
+  claims no sample is contested. On a proper scoring rule that trains uniform
+  over-confidence; temperature scaling is a monotone transform and cannot
+  invent sample-level differences the labels never carried.
 
 ## Why `0.9` and not `1.0`
 
@@ -86,4 +114,5 @@ well-fitted temperature can only help if the targets were not already saturated.
 - [ ] `label == argmax(probabilities)`
 - [ ] no one-hot unless explicitly justified and documented
 - [ ] no uniform distributions
-- [ ] primary `0.9` by default; `0.7` only for documented ambiguity
+- [ ] primary `0.9` by default; lower only with `meta.primary_basis`, and never
+      `<= 0.5` or `> 0.9`

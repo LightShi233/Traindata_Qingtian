@@ -505,6 +505,24 @@ def check_case(case, where, args, state):
                 n = len(q["criteria"]) if isinstance(q["criteria"], list) else 0
                 if not isinstance(case[qid], int) or isinstance(case[qid], bool) or not (0 <= case[qid] < n):
                     errs.append(f"{where}: {qid}={case[qid]!r} 不是有效等级 (0..{n-1})")
+
+    # Optional per-case confidence. The default 0.9 is a template prior; a lower
+    # value is how a case says "the evidence itself is contested". It must stay
+    # above 0.5 so the label still holds a majority of the mass (renormalisation
+    # spreads the rest evenly), and it must name where the uncertainty came from,
+    # because a soft label that is soft for no recorded reason is noise.
+    if "primary" in case:
+        p = case["primary"]
+        if not isinstance(p, (int, float)) or isinstance(p, bool) or not (0.5 < p <= 0.9):
+            errs.append(f"{where}: primary 必须是 (0.5, 0.9] 的数字，实际 {p!r}；"
+                        "低于 0.5 主标签就不再占多数，高于 0.9 是过度自信")
+        elif p < 0.9:
+            meta = case.get("meta")
+            basis = meta.get("primary_basis") if isinstance(meta, dict) else None
+            if not isinstance(basis, str) or not basis.strip():
+                errs.append(f"{where}: primary={p} < 0.9 但没有 meta.primary_basis；"
+                            "降置信度必须写明依据（例如人工仲裁的分歧条数或 κ），"
+                            "否则等于随手编一个不确定性")
     return errs
 
 
@@ -519,23 +537,29 @@ def expand_case(case, index, taxonomy):
     """
     text = json.dumps(case["turns"], ensure_ascii=False)
     h = hashlib.sha256(text.encode()).hexdigest()
+    # 0.9 is the template prior. A case may lower it when the evidence is
+    # genuinely contested (a recorded adjudication, see references/soft-labels.md);
+    # the remainder is still spread evenly, so the label keeps the majority.
+    primary = float(case.get("primary", 0.9))
+    rest = 1.0 - primary
     rows = []
     for qid, q in taxonomy["questions"].items():
         qt = q["type"]
         crit = q["criteria"]
         if qt == "noul":
             pos = bool(case.get("safe") is False or case.get(qid))
-            probs = ({"true": 0.9, "false": 0.1} if pos else {"true": 0.1, "false": 0.9})
+            probs = ({"true": primary, "false": rest} if pos
+                     else {"true": rest, "false": primary})
             label = "true" if pos else "false"
         elif qt == "choice":
             keys = list(crit)
             k = case[qid]
-            probs = {kk: (0.9 if kk == k else 0.1 / (len(keys) - 1)) for kk in keys}
+            probs = {kk: (primary if kk == k else rest / (len(keys) - 1)) for kk in keys}
             label = k
         else:
             keys = [str(i) for i in range(len(crit))]
             k = str(case[qid])
-            probs = {kk: (0.9 if kk == k else 0.1 / (len(keys) - 1)) for kk in keys}
+            probs = {kk: (primary if kk == k else rest / (len(keys) - 1)) for kk in keys}
             label = k
         row = {
             "id": f"{case['traj_id']}/{qid}",

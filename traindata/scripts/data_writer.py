@@ -1191,6 +1191,9 @@ YAML case 的最小形状（每个 case 一个映射）：
     request_shape=contextual 时还要 context_span（turns 里的原文子串）
     request_shape=near_miss 还要 benign_directive_span（仅 clean case，且必须真的出现在 turns 里）
     不要在 meta 里写 salted —— 由宿主脚本盖
+  可选 primary：默认 0.9（其余概率均摊）。只有样本本身有真实争议时才调低，
+  取值必须 (0.5, 0.9]，且同时写 meta.primary_basis 说明依据（例如人工仲裁的
+  分歧条数）；没有依据的降置信度会被 validator 拒绝。
 
 最常被脚本拒绝的原因（按出现频率）：
   - text 太长：超过 ruhui 1024-token 窗口（约 3.2k 字符）会被尾部截断，违规动作通常在末尾
