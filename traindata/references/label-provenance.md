@@ -63,6 +63,22 @@ pipeline's current output. `audit_shortcut.py` prints the same table for any
 set of case-form chunks, and its verdict comes from held-out predictions, not
 the in-sample fit.
 
+**A number without its provenance is not a number.** Two measurements of "the
+same" probe are incomparable if any of these differ, so cite all three:
+
+    (n = 356 cases, 8 measured features, corpus = local copy @ 2026-11-02)
+
+- *n* — cases, not records;
+- *feature set* — this probe measures **8**: destructive verb, egress verb,
+  admin verb, tool-call count, log length, hedge count, address presence, agent
+  text volume. A 5-feature probe (the external audit's set) produces a different
+  AUC on the same corpus;
+- *corpus identity* — version and copy; a subset is not the corpus.
+
+Concrete example of the failure: 0.886 came from 356 cases × 8 features on a
+partial copy, 0.817 from 756 cases × 5 features on the full corpus. Neither
+number refutes the other, and "the AUC is about 0.8" is a meaningless sentence.
+
 **Follow-rate: the shortcut and the label error are the same thing.** A later
 experiment re-ran the probe against audited (human-corrected) labels. The
 headline AUC barely moved (0.817 → 0.821), but on the 44 cases a human had
@@ -292,12 +308,20 @@ values, and not something to repair: validating them against v3 must fail, and
   v2 case contributes 3 items instead of 5, so it is silently down-weighted to
   60%; its rows also fall outside the v3 `(choice,7)` / `(score,4)` buckets.
   `merge` already refuses a mixed round. `integrate`/`split` now **hard-fail**
-  when the input carries more than one head set: case-form chunks fail earlier
-  (a missing head is a validation error even without `--require-complete-cases`),
-  and the record-form path — which is schema-agnostic — gets an explicit
-  `head_set_errors` check before anything is written. Either way a mixed
-  product cannot be produced, so the `INFO` below is a diagnostic, not the
-  safeguard.
+  when the input carries more than one **head shape**, where shape is the head
+  ids **plus each head's option keys** (`severity{0,1,2,3}`), not just the
+  names: a v4 that keeps the same five names and changes an option count would
+  otherwise pass and silently mismatch the temperature buckets. Case-form input
+  fails earlier (a missing head is a validation error even without
+  `--require-complete-cases`); the record-form path — which is schema-agnostic —
+  gets the explicit `head_set_errors` check before anything is written. The
+  `INFO` below is a diagnostic, not the safeguard.
+- **The residual gap is same heads, same options, different wording.** If a
+  future version only rewords an instruction, the shape is identical and the
+  check passes: the corpus would carry two wordings for one question id. That
+  is not bucket-breaking, but it is still a mix — group integrations by
+  `taxonomy_version` (`data_writer.py check` names the mismatched chunks) rather
+  than relying on the shape check alone.
 - **`data_writer.py check` prints the mismatches** (`INFO [taxonomy-version]`,
   non-failing) so a build run can see which chunks belong to another version
   without opening the manifests.

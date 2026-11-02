@@ -673,25 +673,51 @@ def completeness_errors(state, taxonomy):
     return errs
 
 
-def head_set_errors(rows):
-    """Reject a corpus whose cases do not all carry the same head set.
+def case_shape(records):
+    """(question id, option keys) per head — the identity of a taxonomy version.
 
-    Case-form input already fails validation when a head is missing, but the
-    record-form path (``--integrate`` without ``--expand``) is schema-agnostic:
-    a v2 recording and a v3 recording both look like valid records, and the
-    merged file would carry a silently down-weighted old-version case (3 rows
-    instead of 5) with no way to tell afterwards. One corpus, one head set.
+    Head names alone are not enough: a v4 that keeps the same five names but
+    changes an option count (e.g. `severity` 4 levels → 3) has the same head set
+    and would pass a name-only check, while its records no longer fit the same
+    temperature bucket. The option keys are carried verbatim in every record's
+    ``soft_label.probabilities``, so including them makes the check detect that
+    change without needing the manifest.
     """
-    sets = defaultdict(set)
+    shape = []
+    for r in records:
+        qid = qid_of(r["id"])
+        probs = (r.get("soft_label") or {}).get("probabilities")
+        if not isinstance(probs, dict) or qid is None:
+            continue
+        shape.append((qid, tuple(sorted(str(k) for k in probs))))
+    return tuple(sorted(shape))
+
+
+def _shape_summary(shape):
+    return ", ".join(f"{qid}{len(keys)}" for qid, keys in shape)
+
+
+def head_set_errors(rows):
+    """Reject a corpus whose cases do not all carry the same head shape.
+
+    Two things must match across every case: the question ids **and** each
+    question's option keys. Case-form input already fails validation when a head
+    is missing, but the record-form path (``--integrate`` without ``--expand``)
+    is schema-agnostic: a v2 recording and a v3 recording both look like valid
+    records, and a head-name-only check would also miss a same-name,
+    different-arity version. One corpus, one shape.
+    """
+    by_case = defaultdict(list)
     for r in rows:
-        sets[case_key(r["id"])].add(qid_of(r["id"]))
-    shapes = Counter(frozenset(v) for v in sets.values() if v)
+        by_case[case_key(r["id"])].append(r)
+    shapes = Counter(case_shape(recs) for recs in by_case.values())
+    shapes.pop((), None)
     if len(shapes) <= 1:
         return []
-    shown = ", ".join(f"{sorted(s)} ×{n}" for s, n in shapes.most_common(4))
-    return [f"同一语料里出现 {len(shapes)} 种 head 组合：{shown}。"
-            "这是不同 taxonomy 版本（或部分 case 缺 head）混在一起，"
-            "整合后会得到版本混合的训练集；按 round 的 taxonomy_version 分开整合"]
+    shown = " | ".join(f"[{_shape_summary(s)}] ×{n}" for s, n in shapes.most_common(4))
+    return [f"同一语料里出现 {len(shapes)} 种 head/选项域组合：{shown}。"
+            "这要么是不同 taxonomy 版本混在一起，要么是同一 head 改了选项数；"
+            "两种都会让温度桶错配。按 round 的 taxonomy_version 分开整合"]
 
 
 def collect(paths, args, expand=False):
@@ -786,6 +812,8 @@ def render_card(s, rows, source_desc, taxonomy_version, checks):
               "- Generated corpus: verify a pilot by hand before scaling (see assets/inspection-report.md).",
               "- Labels come from the generation plan except where a human correction is recorded; "
               "the measured surface-feature count and any correction follow-rate belong next to this card.",
+              "- Any metric quoted in or beside this card must carry `(n, feature set, corpus id)`; "
+              "a subset measurement and a full-corpus measurement are not comparable.",
               ""]
     return "\n".join(lines)
 

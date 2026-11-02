@@ -423,7 +423,9 @@ The card must not claim shortcut elimination. The honest line is: label source
 is the generation plan for every case not human-corrected; the measured feature
 set is reported with its discriminative count; the correction pass, if any, is
 reported with its label-flip sensitivity, not with `follow_corrected` (that
-number is trained on the correction and cannot fail).
+number is trained on the correction and cannot fail). Every metric in or beside
+the card carries `(n, feature set, corpus id)` — a subset measurement and a
+full-corpus measurement are not comparable.
 
 ## Record format and authoring
 
