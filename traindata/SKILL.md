@@ -388,9 +388,12 @@ taxonomy, then scale out. Never relax the audit to pass a chunk.
    leakage checks, then split into **training**, **calibration**, and **test**
    sets. Integrate **one taxonomy version at a time**: a v2 chunk carries 3
    heads, so mixing it into a v3 corpus silently down-weights its cases and
-   falls outside the v3 temperature buckets. `merge` refuses a mixed round;
-   `integrate` takes a glob and does not — select chunks by the round's
-   `taxonomy_version` (`data_writer.py check` prints the mismatches as INFO).
+   falls outside the v3 temperature buckets. `merge` refuses a mixed round, and
+   `integrate`/`split` now hard-fail on more than one head set (case-form input
+   fails validation earlier; record-form input gets an explicit check). Select
+   chunks by the round's `taxonomy_version`; `data_writer.py check` prints the
+   mismatches as INFO, and already-merged training files must be audited by
+   hand (`--require-complete-cases` over `data/rounds/*/soft_*.jsonl`).
    Split by **case**, never by record, so all questions of a case stay in
    one split. `--split-dir` does this deterministically and writes
    `split_manifest.json`; then run the printed leakage command between splits.

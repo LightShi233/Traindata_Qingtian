@@ -665,8 +665,33 @@ def completeness_errors(state, taxonomy):
         if g["qids"] != want:
             missing = sorted(want - g["qids"])
             extra = sorted(g["qids"] - want)
-            errs.append(f"{ck}: case 问题集与 taxonomy 不一致; 缺 {missing}, 多 {extra}")
+            hint = ""
+            if missing and len(missing) > 1:
+                hint = ("；缺的是一整组 head，该 chunk 多半属于旧 taxonomy 版本"
+                        "（按 round 清单的 taxonomy_version 分组后再整合）")
+            errs.append(f"{ck}: case 问题集与 taxonomy 不一致; 缺 {missing}, 多 {extra}{hint}")
     return errs
+
+
+def head_set_errors(rows):
+    """Reject a corpus whose cases do not all carry the same head set.
+
+    Case-form input already fails validation when a head is missing, but the
+    record-form path (``--integrate`` without ``--expand``) is schema-agnostic:
+    a v2 recording and a v3 recording both look like valid records, and the
+    merged file would carry a silently down-weighted old-version case (3 rows
+    instead of 5) with no way to tell afterwards. One corpus, one head set.
+    """
+    sets = defaultdict(set)
+    for r in rows:
+        sets[case_key(r["id"])].add(qid_of(r["id"]))
+    shapes = Counter(frozenset(v) for v in sets.values() if v)
+    if len(shapes) <= 1:
+        return []
+    shown = ", ".join(f"{sorted(s)} ×{n}" for s, n in shapes.most_common(4))
+    return [f"同一语料里出现 {len(shapes)} 种 head 组合：{shown}。"
+            "这是不同 taxonomy 版本（或部分 case 缺 head）混在一起，"
+            "整合后会得到版本混合的训练集；按 round 的 taxonomy_version 分开整合"]
 
 
 def collect(paths, args, expand=False):
@@ -749,8 +774,18 @@ def render_card(s, rows, source_desc, taxonomy_version, checks):
             lines.append(f"| `{label}` | {n} |")
         lines.append("")
     lines += ["## Checks", "", *[f"- {c}" for c in checks]]
+    lines += ["", "## Calibration and base rate", "",
+              "- This corpus is balanced by design: the audit caps `safe=false` at half, and "
+              "chunks tend to sit exactly at 50/50. Do not read that ratio as a deployment prior.",
+              "- Temperature scaling is monotone and **cannot** change the base rate. A temperature "
+              "fitted on this split is valid only at this prior; for a different deployment prior, "
+              "reweight the calibration split or apply a logit offset by `log(prior_new / prior_here)`, "
+              "and report ECE at both priors.",
+              ""]
     lines += ["", "## Known limitations", "",
               "- Generated corpus: verify a pilot by hand before scaling (see assets/inspection-report.md).",
+              "- Labels come from the generation plan except where a human correction is recorded; "
+              "the measured surface-feature count and any correction follow-rate belong next to this card.",
               ""]
     return "\n".join(lines)
 
@@ -929,6 +964,17 @@ def main():
             rows.extend(expand_case(case, i, args.taxonomy))
     else:
         rows = load_rows(inputs, args.deadline)
+
+    if args.split_dir or args.integrate:
+        # Case-form input already rejects a half-labelled case, but record-form
+        # input is schema-agnostic: mixed versions would merge into one product
+        # and the version information is gone by the time `merge` would look.
+        shape_errors = head_set_errors(rows)
+        if shape_errors:
+            for err in shape_errors:
+                print(f" - {err}")
+            print("整合/切分失败：这不是可以自动修复的问题，按版本分组后重跑")
+            sys.exit(1)
 
     checks = [
         f"schema and soft-label validation: passed ({len(errors)} errors)",

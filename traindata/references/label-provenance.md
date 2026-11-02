@@ -291,11 +291,23 @@ values, and not something to repair: validating them against v3 must fail, and
 - **Do not mix versions in one training corpus.** Under per-item averaging a
   v2 case contributes 3 items instead of 5, so it is silently down-weighted to
   60%; its rows also fall outside the v3 `(choice,7)` / `(score,4)` buckets.
-  `merge` already refuses a mixed round; `integrate`/`split` take globs and do
-  not, so select chunks by round version.
+  `merge` already refuses a mixed round. `integrate`/`split` now **hard-fail**
+  when the input carries more than one head set: case-form chunks fail earlier
+  (a missing head is a validation error even without `--require-complete-cases`),
+  and the record-form path — which is schema-agnostic — gets an explicit
+  `head_set_errors` check before anything is written. Either way a mixed
+  product cannot be produced, so the `INFO` below is a diagnostic, not the
+  safeguard.
 - **`data_writer.py check` prints the mismatches** (`INFO [taxonomy-version]`,
   non-failing) so a build run can see which chunks belong to another version
   without opening the manifests.
+- **Already-merged training files need the same check by hand.** The gate above
+  protects new builds, not history: a `soft_*.jsonl` produced before this check
+  may already contain 3-head cases, and if it was trained on, those rows are
+  part of the model's history and cannot be "un-mixed". Audit them with
+  `validate_and_integrate.py --check 'data/rounds/*/soft_*.jsonl'
+  --taxonomy data/taxonomy.json --require-complete-cases`; record the result in
+  the data card instead of assuming a clean corpus.
 - **CI needs no exemption for history.** The workflow gates only the diff
   (`git diff --base..HEAD -- 'chunks/chunk_*.jsonl'`); already-published v2
   chunks are never re-validated against v3. The failure only appears if someone
@@ -334,6 +346,15 @@ reference `prepare_train_data.py`, not assumed:
   A different loss means per-item averaging (dropping a head only removes its
   items). An unchanged loss means per-qtype grouping (dropping one `choice`
   head re-weights the remaining heads against `noul`/`score`).
+- **The corpus is balanced on purpose; the calibration prior is not the
+  deployment prior.** The audit caps `safe=false` at half, and in practice every
+  chunk sits at exactly 50/50. That is a training choice (it removes the trivial
+  "majority class" shortcut), not an estimate of how often violations occur.
+  Temperature scaling is monotone and cannot change the base rate: a temperature
+  fitted on a 50/50 split is calibrated only at 50/50. For a long-tailed
+  deployment prior, reweight the calibration split before fitting or apply a
+  logit offset of `log(prior_new / prior_here)`, and report ECE at both priors.
+  The data card now states this next to the label distribution.
 - **Calibration buckets are per `(qtype, option-count)`.** The heads split as
   `mechanism (choice, 5)`, `harm_kind (choice, 7)`, `severity (score, 4)`,
   `grounding (score, 4)`. So dropping `mechanism` does **not** change
