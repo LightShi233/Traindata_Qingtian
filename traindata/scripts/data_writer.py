@@ -395,6 +395,46 @@ def baseline_chunks(data_dir):
 # --------------------------------------------------------------------------- #
 # allocate
 # --------------------------------------------------------------------------- #
+def _read_email_manifest(doc, path):
+    """Return (pairs, addresses) from either manifest shape.
+
+    ``sample_emails.py --manifest`` writes one object with ``emails`` and
+    ``pairs``. A per-chunk planner often writes a **list** of
+    ``{"chunk": n, "pairs": [...]}`` instead; it has no ``emails`` key, so a
+    strict reader either crashes (``'list' has no 'get'``) or silently
+    registers an empty batch and rejects every address. Both shapes describe a
+    whitelist, so accept both and say which was read.
+    """
+    if isinstance(doc, dict):
+        emails = doc.get("emails")
+        pairs = doc.get("pairs")
+        if not isinstance(emails, list):
+            emails = []
+        if not isinstance(pairs, list):
+            pairs = []
+        return pairs, [str(e) for e in emails]
+    if isinstance(doc, list):
+        pairs = []
+        for item in doc:
+            if isinstance(item, dict) and isinstance(item.get("pairs"), list):
+                pairs.extend(item["pairs"])
+        addresses = []
+        for pair in pairs:
+            if isinstance(pair, dict):
+                for addr in pair.get("addresses", []) or []:
+                    addresses.append(str(addr))
+        if not pairs:
+            raise SystemExit(
+                f"{path} 是列表，但没有找到任何 pairs[].addresses。\n"
+                "  sample_emails.py --manifest 输出的是一个对象（含 emails / pairs）；\n"
+                "  如果你自己生成了按 chunk 分组的列表，每个元素需要 "
+                '{"chunk": n, "pairs": [{"addresses": [...]}]}')
+        print(f"[email-manifest] 读取到 {len(pairs)} 个 pair / {len(addresses)} 个地址"
+              f"（列表形式，按 pairs[].addresses 归集）", file=sys.stderr)
+        return pairs, addresses
+    raise SystemExit(f"{path} 既不是对象也不是列表，无法作为 email manifest")
+
+
 def cmd_allocate(args):
     data_dir = os.path.abspath(args.data_dir)
     os.makedirs(os.path.join(data_dir, "chunks"), exist_ok=True)
@@ -469,12 +509,11 @@ def cmd_allocate(args):
                     batch_doc = json.load(f)
             except (OSError, json.JSONDecodeError) as exc:
                 raise SystemExit(f"email manifest 无法读取: {args.email_manifest}: {exc}")
-            batch = [str(e) for e in batch_doc.get("emails", [])]
+            pairs, batch = _read_email_manifest(batch_doc, args.email_manifest)
             if not batch:
-                raise SystemExit(f"{args.email_manifest} 里没有 emails；"
+                raise SystemExit(f"{args.email_manifest} 里没有可读的地址；"
                                  "用 sample_emails.py --cross-map --manifest 生成")
             manifest["email_batch"] = batch
-            pairs = batch_doc.get("pairs")
             if isinstance(pairs, list) and pairs:
                 # Keep the cross-map assignment durable: CI rebuilds the audit
                 # whitelist from the round manifest, and without these pairs the
@@ -546,6 +585,11 @@ def cmd_allocate(args):
                           "clock": round_clock(manifest),
                           "allocations": allocated}, indent=2, ensure_ascii=False))
         return 0
+    if getattr(args, "email_manifest", None):
+        print("地址清单只有一处真源：allocate 时登记的 --email-manifest。"
+              "生成时直接用这份文件的 emails / pairs[].addresses；不要再另外派发"
+              "一份「按 chunk 分组」的清单——两份清单一旦不一致，模型会花大量"
+              "思考去核对哪份才是准的。")
     print(f"round: {round_id}")
     print(f"manifest: {_display(round_file(data_dir, round_id))}")
     clock = round_clock(manifest)

@@ -140,6 +140,16 @@ python3 traindata/scripts/data_writer.py allocate --count 1 \
   [--worker sub-3]
 #    -> round: r-2026...   chunk_0001  yaml=data/inbox/chunk_0001.yaml
 
+#    The manifest is the ONE source of addresses. It has two accepted shapes:
+#      object: {"emails": [...], "pairs": [{"addresses": [...]}], "how_to_read": {...}}
+#              (what sample_emails.py writes)
+#      list:   [{"chunk": n, "pairs": [{"addresses": [...]}]}, ...]
+#              (a per-chunk plan)
+#    Both register the same whitelist; a list is read from pairs[].addresses.
+#    Do not keep a second, by-chunk copy of the addresses beside it: when the
+#    two disagree the generator spends its turns reconciling them instead of
+#    writing cases.
+
 # 2. write the model's YAML to that exact path, then gate the YAML itself
 #    (no --require-salt yet: the host stamp does not exist before write)
 python3 traindata/scripts/validate_and_integrate.py --check data/inbox/chunk_0001.yaml \

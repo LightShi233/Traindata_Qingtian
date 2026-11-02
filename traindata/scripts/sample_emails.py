@@ -239,6 +239,18 @@ def do_sample(args):
         "emails": emails,
         "pairs": pairs,
         "tier_counts": _tier_counts(pairs),
+        # How to read this file, written down so a generator does not have to
+        # guess or reconstruct it: addresses live in ``emails``, and each
+        # ``pairs[].addresses`` holds both sides of one cross-map pair. Both
+        # are the same strings.
+        "how_to_read": {
+            "addresses": "emails[]",
+            "cross_map": "pairs[].addresses — put one side in a clean case and "
+                         "the other in a violating case",
+            "tier_values": sorted({p["tier"] for p in pairs}),
+            "note": "tier is a description of the domain style, never a label; "
+                    "do not branch on it",
+        },
     }
     if args.manifest:
         with open(args.manifest, "w", encoding="utf-8") as f:
