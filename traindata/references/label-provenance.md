@@ -287,6 +287,26 @@ random sample of the error population (it is not — it is whatever the recaller
 and the reviewers reached). "44 fixed, ~7 left" is arithmetic on two
 incomparable quantities; "44 confirmed, residual unknown" is the true statement.
 
+**"Unknown" may be bounded without being converted into a count.** An external
+estimate can travel with the ledger as a point, an interval, and a method; the
+card prints all three and compares the lower bound to the confirmed count
+qualitatively: if the bound is at or below the confirmed count, the residual is
+not statistically separable from zero (which is not the same as zero); if the
+bound is above it, a non-zero residual is plausible but its size still inherits
+the sampling method. Neither sentence subtracts the estimate from the confirmed
+count, so the ban above still holds.
+
+The numbers in such an estimate move, including for the person who computed
+them: the same reviewer reported 51 and later 65 for the same corpus under the
+same method, differing only in how the high-risk stratum and the flip rate were
+defined. Store the interval and the method, never the constant.
+
+The cheapest way to shrink the interval is to review the stratum that carries
+the extrapolation, not the one already reviewed exhaustively. In the measured
+case the control stratum had 90 reviewed out of 653 and contributed ±30 cases,
+while the high-risk stratum was 113/113; adding ~84 control reviews cut its
+uncertainty by about a third. No gate can do this — gates only see future data.
+
 The practical consequence for this skill: a data card must carry the confirmed
 correction count (`--corrections`), and when no ledger is supplied it must say
 that the card describes **gates passed, not label correctness**. Two historical

@@ -420,8 +420,11 @@ tiers and rejected proposals). Without a ledger the card says the corpus
 describes gates passed, not label correctness. Never turn a sample-based
 mislabel estimate into a count of remaining rows: report "N confirmed
 corrections, residual unknown, not cleared" (`references/label-provenance.md`
-§6). A structural issue (cases authored against an older taxonomy, fewer head
-rows per case) is a separate line with an exact count — do not merge the two.
+§6). An external estimate may be supplied as point + interval + method; the
+card prints all three and states whether the residual is separable from zero,
+without subtracting. A structural issue (cases authored against an older
+taxonomy, fewer head rows per case) is a separate line with an exact count —
+do not merge the two.
 
 If a pre-check corpus is mixed in as warm-up, the card must record **both** the
 old share and the step at which it is dropped (one epoch over the new corpus,

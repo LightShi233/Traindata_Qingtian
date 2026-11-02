@@ -797,21 +797,35 @@ def print_summary(s, rows):
 
 
 def load_corrections(path):
-    """Load a correction ledger: confirmed vs rejected label fixes.
+    """Load a correction ledger and, optionally, an external bound.
 
     Tolerant like the rest of the loader: a JSON array, a single object, or
     JSONL. A row needs ``traj_id``; ``status`` is ``confirmed`` (default) or
-    ``rejected``; ``tier`` is free-form and counted. The point is to carry
-    **confirmed** repairs and *not* pretend they are the whole error population.
+    ``rejected``; ``tier`` is free-form and counted.
+
+    The wrapper form may also carry an **external estimate** of the total
+    mislabel population, which is the only honest way to give "unknown" a
+    shape::
+
+        {"corrections": [...],
+         "estimate": {"point": 65, "low": 38, "high": 117,
+                      "method": "stratified extrapolation (high-risk 36/113, control 4/90)",
+                      "source": "18_mislabel_bounds.py"}}
+
+    A point estimate is never converted into a count of remaining rows; the
+    card prints the interval and the method next to it.
     """
     with open(path, encoding="utf-8-sig") as fh:
         text = fh.read()
     stripped = text.lstrip()
+    estimate = None
     if stripped.startswith("["):
         rows = json.loads(stripped)
     elif stripped.startswith("{"):
         doc = json.loads(stripped)
         rows = doc.get("corrections") if isinstance(doc.get("corrections"), list) else [doc]
+        if isinstance(doc.get("estimate"), dict):
+            estimate = doc["estimate"]
     else:
         rows = [json.loads(line) for line in text.splitlines() if line.strip()]
     confirmed, rejected, tiers = 0, 0, Counter()
@@ -824,7 +838,8 @@ def load_corrections(path):
         confirmed += 1
         if row.get("tier"):
             tiers[str(row["tier"])] += 1
-    return {"confirmed": confirmed, "rejected": rejected, "tiers": dict(tiers)}
+    return {"confirmed": confirmed, "rejected": rejected,
+            "tiers": dict(tiers), "estimate": estimate}
 
 
 def render_card(s, rows, source_desc, taxonomy_version, checks, corrections=None):
@@ -875,6 +890,32 @@ def render_card(s, rows, source_desc, taxonomy_version, checks, corrections=None
         if corrections["rejected"]:
             lines.append(f"- rejected correction proposals: {corrections['rejected']} "
                          "(not corrections, do not count them)")
+        estimate = corrections.get("estimate") or {}
+        low, high = estimate.get("low"), estimate.get("high")
+        if low is not None and high is not None:
+            point = estimate.get("point")
+            head = f"- external estimate of the total mislabel population: "
+            head += f"**{point}** " if point is not None else ""
+            head += f"[{low}, {high}]"
+            if estimate.get("method"):
+                head += f" — {estimate['method']}"
+            if estimate.get("source"):
+                head += f" (`{estimate['source']}`)"
+            lines.append(head)
+            # Qualitative only: comparing the lower bound to the confirmed count
+            # says whether a residual is separable from zero, but never produces
+            # a count of remaining rows.
+            if isinstance(low, (int, float)) and low <= corrections["confirmed"]:
+                lines.append("- the interval's lower bound is at or below the confirmed "
+                             "count, so the residual is **not statistically separable from "
+                             "zero** — which is not the same as zero.")
+            else:
+                lines.append("- the interval starts above the confirmed count, so a non-zero "
+                             "residual is plausible; its size still inherits the sampling "
+                             "method, not a row count.")
+        elif estimate:
+            lines.append("- an estimate was supplied without a `low`/`high` interval; a point "
+                         "estimate is not a bound and is not used as one here.")
         lines.append("- **residual: unknown, not cleared.** A sample-based mislabel estimate "
                      "is an estimate, not a count of remaining rows; do not subtract it from "
                      "the confirmed number or restate the remainder as a count. Cases without "
