@@ -109,179 +109,29 @@ jobs:
             --settings .github/qoder-settings.json
             --model ${{ inputs.model || 'dfmodel' }}
           prompt: |
-            按仓库内的 ./traindata/SKILL.md 契约与流程为 Ruhui 编写训练数据
-            （这是仓库内的 skill，不需要安装、复制或修改它）。
+            先运行一次，把它打印的全部内容当作你的任务说明书：
+              python3 traindata/scripts/data_writer.py brief
+            那就是全部规则（流程、字段、常见拒绝原因、子代理契约）。
+            另外只读这两份，遇到 brief 没覆盖的问题再查：
+              traindata/SKILL.md、traindata/references/anti-shortcut.md
 
-            第 0 条（元规则，优先于以下所有条款）：
-            脚本是唯一权威。data_writer.py / validate_and_integrate.py / audit_diversity.py /
-            salt.py 的退出码就是判定结果：0 才算通过，非 0 就是没通过。
-            - 你必须服从脚本结论，不得改写、绕过、注释掉或放宽任何检查来让它变绿。
-            - 不得用自己的判断、自述或"我认为已经修好了"代替脚本判定；
-              每次修复后必须重跑脚本，以退出码为准。
-            - 子代理只负责把 YAML 写进分配给它的槽位；write 和两个 gate 只由主代理
-              执行，并以主代理看到的退出码为准。子代理自述"已完成/已验证"不构成验证；
-              主代理在 write 前先核对子代理回显的 traj_id / payload_span 是否与分配
-              清单一致，不一致就整块重派，不要替它补写。
-            - 被脚本拒绝时，按它打印的提示修复数据并重跑；不得手改产物文件。
+            不要做的事（下面每条都会让本轮白跑）：
+            - 不要读 traindata/scripts/ 下的实现源码，也不要加任何 .py 脚本：
+              工具已现成，你只输出 YAML 并调用 data_writer.py。
+            - 不要改 .github/、traindata/、data/taxonomy.json；只在 ./data 内产出。
+            - 不要执行任何 git 命令；推送与校验由 CI 完成。
+            - 不要 grep/cat traindata/assets/email_library/，地址只能来自
+              sample_emails.py 的输出。
 
-            硬性要求：
-            1. 只允许改动默认输出根目录 ./data（CI 的提交与校验只认这个根），
-               严禁修改 .github/、traindata/ 或任何已有源码。
-               严禁修改 data/taxonomy.json：它是跨 chunk 的稳定契约，改了会让已通过的
-               数据全部失效；需要改 taxonomy 时停下报告，不要自行修改。
-               严禁新增任何 .py 脚本（尤其是 author.py / gen.py 之类的生成器）：
-               工具已经现成，你只负责输出 YAML 并调用 traindata/scripts/data_writer.py。
+            协作方式（已经写死在脚本里，脚本会自己打印，照抄即可）：
+            - 用 allocate --count 5 --workers a1 a2 a3 a4 a5 --budget-hours 0.5
+              一次分配 5 个槽位，把打印出的「子代理契约」原样放进每个子代理的任务。
+            - 子代理只做三件事：claim 槽位、写一个 YAML、回显 traj_id/payload_span。
+            - write 和两个 gate 只由你执行，以它们的退出码为准；子代理自述不算证据。
+            - 子代理全部返回后逐个 write + 跑 gate，处理完每个槽位再结束。
 
-            1.1 规则从哪里看（重要）：
-               开工前先运行 python3 traindata/scripts/data_writer.py brief，
-               它会打印流程、YAML 字段和最常见被拒原因。
-               需要细节时读 traindata/SKILL.md 和 traindata/references/*.md。
-               不要去读 traindata/scripts/ 下的实现源码（dataloader.py、data_writer.py 等）：
-               那是工具内部，读它既不会告诉你该写什么，也容易让你跑去改它。
-               如果 brief 和文档没覆盖你的疑问，就按脚本的报错信息修数据并重跑，
-               而不是翻源码猜。
-
-            2. 地址和 salt 都要在写数据前锁定：
-               a) 地址：运行 sample_emails.py --scenario <safe|violation|injection>
-                  --count N --cross-map --manifest work/emails.json --ledger work/ledger.txt
-                  拿到冻结批次（这里的 N 是地址数，不是 case 数）。
-               b) salt：把本轮实际发给模型的生成提示词写到 work/prompt.txt，运行
-                  salt.py --in work/prompt.txt --out work/salted_prompt.txt。
-                  每一轮都必须登记它；不盖 salt 章的 chunk 不能提交（--require-salt 必失败）。
-               c) 再运行 allocate --count <chunk 槽位数> --email-manifest work/emails.json
-                  --salted-prompt work/salted_prompt.txt 登记。这里的 --count 是
-                  chunk 槽位数，不是 case 数或地址数；一个 pilot chunk 用 1。
-               严禁 grep/cat/读取 traindata/assets/email_library/ 下任何文件，
-               严禁自己挑域名或用 bash 循环去查"某域名在不在黑名单"。
-               理由：那是 28 万行 blocklist，逐个 grep 既慢又没意义；
-               手工挑域名会绕过分层加权与 cross-map，让域名变成标签信号。
-               write 会拒绝：未登记批次，或样本里出现批次外地址。
-
-            3. 只把纯 YAML 写到 allocate 打印的 data/inbox/<NAME>.yaml
-               （action 写成映射、长文本用 | 块标量），然后由主代理执行 write 转换。
-               严禁手写、手改或另存 jsonl。已提交的 chunk 是只读的，不能再改；
-               修正只针对本轮未提交的 chunk：discard 退回 pending 后同名重写。
-               即使使用子代理，也由主代理统一 allocate / write / 跑 gate；
-               子代理只把自己那个 chunk 的 YAML 写进分配好的槽位，并回显它写的
-               traj_id 与 payload_span，不执行 write 或 gate。
-
-            3.1 强烈鼓励并行：30 分钟预算下，串行写一个 chunk 只产出 8–12 个 case。
-               **每一轮都请开 5–8 个子代理**，默认开满 8 个；不要只开一两个然后
-               自己串行写。下限 5 是因为低于 5 时整轮的量撑不满预算，上限 8 是因为
-               审查成本：主代理必须逐个核对子代理回显的 traj_id / payload_span
-               并自己重跑 write 与两个 gate，开得再多主代理反而来不及验证，
-               最后整轮通不过。预算已经吃紧（第 7 条的 warn）时，按已开的数量收尾，
-               不要再追加新的子代理。
-               做法：
-                 a) 主代理一次性 allocate --count <子代理数量> --workers <名字1> <名字2> …
-                    （人数与 --count 一致，标签互不相同：脚本会拒绝重复标签，
-                    因为一个标签认领两个槽位时，它得在「自己的两个 chunk」里二选一，
-                    漏掉的必然静默丢失）。它会打印一张「chunk 名 → 子代理」分派表，
-                    并写进 round 清单；
-                 b) chunk 名带本轮 CI run 号后缀，形如 chunk_0007_40840653996。
-                    子代理必须**逐字复制**分派表里自己那一行的 chunk 名和 YAML 路径，
-                    不得自己起名、不得省略后缀、不得改用 chunk_0007.yaml 之类的写法；
-                    抄错一位就会写进别人的槽位。抄了别轮的名字也会被 claim 拒绝，
-                    报错里会告诉你那个名字属于哪一轮——照提示改，不要绕；
-                 c) 子代理动笔前先认领自己的槽位：
-                      data_writer.py claim --round <id> --name <分派表里的名字> --worker <自己>
-                    同一个槽位被第二个子代理认领会直接拒绝，同一标签认领第二个槽位
-                    也会被拒绝。不做这步的话，两个子代理都「写自己的 chunk」时，
-                    后写的 YAML 会静默覆盖先写的，其中一份产出就此消失且没有任何报错；
-                 d) 每个子代理只写自己那一个 YAML（8–12 个 case），
-                    不同子代理之间必须使用不同的 scenario_family / entity_family /
-                    id_style / thought_style / injection_surface，否则整轮会因
-                    多样性集中被 audit 拒绝；
-                 e) 子代理全部返回后，主代理按分派表顺序逐个
-                    write --round <id> --name <名字> --worker <名字>，再跑两个 gate；
-                    任何一个失败只修那一个，不要放弃其它 chunk。
-                 f) **必须把每个 allocated 槽位处理完再结束**。子代理交付的 YAML
-                    已经写好了，漏掉 write 等于把它的工作扔掉。收尾前核对
-                    data/rounds/<id>.json：每个 allocation 的 status 都应是
-                    written 或 discarded；还有 pending 就继续处理，不要提前收尾。
-                    这是真实事故：4 个子代理都交了 YAML，主代理只 write 了 2 个就
-                    结束，另外 2 个白做。
-               派给子代理的任务描述必须把 a–f 写成它自己的义务，而不只是主代理的：
-                 子代理的职责只有三件——claim 自己的槽位、写自己那一个 YAML、
-                 回显自己写的 traj_id 与 payload_span。
-                 它**不得**运行 write / merge / gate / git，**不得**写第二个文件，
-                 也**不得**因为「看起来没问题」就宣布通过：gate 的退出码由主代理看，
-                 子代理说「已完成/已通过」不算证据。子代理若被拒绝（claim 报错、
-                 harness 拦截），要原样回报，不要自己改名或换槽位重试。
-
-            4. 只用 data_writer.py merge --round <id> 合并，且只合并本轮产出；
-               严禁 glob 全部 chunk，严禁私自合并其它轮或文件夹中的样本。
-
-            4.1 cron 每 40 分钟会起一轮，所以同时可能有多个生成分支在路上，它们互相
-               看不到对方的数据（allocate 只扫描本分支已有的 chunk）。
-               为此 chunk 名自动带本轮 CI run 号后缀：chunk_0007_40840653996。
-               不同 run 的编号从同一个起点开始也不会撞，你无需处理。
-               traj_id 仍须全域唯一：格式 ruhsoft_<6 位序号>_<8 位随机 hex>。
-               - 6 位序号从本轮 chunk 编号派生，例如 chunk_0007_xxx 就写
-                 000701、000702…（历史 chunk_0001 -> 000101 就是这个做法）。
-               - 后 8 位必须是真正随机的 hex，不要用连续计数器、时间戳或
-                 任何可预测的短串——这是两轮撞号时唯一的分隔符。
-
-            5. 每个 chunk 固定按这个顺序，不要跳步：
-               预检（YAML 可直接读；此时还没有 salt 章，不要带 --require-salt）：
-                 validate_and_integrate.py --check data/inbox/<NAME>.yaml
-                   --taxonomy data/taxonomy.json --expand --require-complete-cases --timeout 300
-                 audit_diversity.py --chunks data/inbox/<NAME>.yaml
-                   --taxonomy data/taxonomy.json --require-injection --strict
-                   --require-taxonomy-axes --email-manifest work/emails.json --timeout 300
-               通过后 write，再对 data/chunks/<NAME>.jsonl 重跑同样两条命令，
-               audit 这次加 --require-salt；最后运行 salt.py --check 该 chunk。
-               跨 chunk 去重：把其它轮已验收的 data/rounds/<round>/soft_*.jsonl
-               用 --leak 传给 validator；--auto-leak 只搜输入旁边，搜不到 rounds/。
-               chunk 通过后才 merge --round <id>；提交前必须运行
-               data_writer.py check --round <id> --strict 且通过。
-               严禁提交任何临时/备份文件（.tmp-*、*.tmp、*.bak、__pycache__ 等）。
-
-            6. 转换与两个 gate 都要带 --timeout；退出码 3 表示该 chunk 未通过，
-               缩小 chunk 重来，不要调大超时。
-
-            7. 计时器：本轮墙钟预算 30 分钟，必须用
-               allocate --count <N> --budget-hours 0.5 显式设定（job 在 38 分钟时
-               被强制结束，而且每 40 分钟会有下一轮启动、把本轮 cancel 掉——
-               所以 30 分钟 stop 之后必须立刻提交，拖到 38 分钟就什么都没了）。
-               命令会显示 ⚠/⛔ 计时提示：
-               - ⚠ warn（超过 75%，约 22 分钟）：把手上这份 YAML 写完，不要再开新场景。
-               - ⛔ stop（超过 30 分钟）：write 会拒绝新 chunk。此时必须立即执行
-                 data_writer.py salvage --round <id> --taxonomy data/taxonomy.json
-                 把已完成且合法的部分转换并合并；推送仍由 CI 负责，不要加 --commit，
-                 也不要自己跑 git。半成品能被交付算成功，用完预算却什么都没交是失败。
-
-            8. 不要执行任何 git 命令（add / commit / push 都不行）。
-               推送由 CI 在 gate 通过后自动完成，你只管把 chunk 做到能过 gate。
-               你的工作终点是：
-                 a) 每个 chunk 都 write 成功、preflight 与 write 后两条 gate 全过；
-                 b) 跑 data_writer.py check --round <id> --strict 退出码 0；
-                 c) merge --round <id> 已执行（这一步会生成 soft_*.jsonl）。
-               完成后在最终回复里写明：轮次、chunk 数、case 数、每条 gate 的退出码。
-               如果本轮没有任何合法产出，不要留半成品，直接说明原因并结束。
-               不要改 data/taxonomy.json；CI 会拒绝验收。
-
-            9. 每个 chunk 8–12 个 case（taxonomy 当前有 5 个问题，一个 case 会展开
-               5 条记录，别把记录数当 case 数）。并行时每个子代理只写自己的
-               一个 chunk，仍遵守 8–12；不要在一次模型调用里塞进超过 12 个
-               case，也不要复制场景凑数。子代理数量见 3.1（每轮 5–8 个，默认开满 8）。
-            10. 特别强调多样性原则：用脚本检查，多样性不足时强制更改。
-                并行度越高，多样性越容易塌：多个子代理很容易不约而同地选同一类
-                场景骨架和组织名。派发时就要把各自的 scenario_family /
-                entity_family / id_style / thought_style 分好，不要等 audit 失败了
-                再回头返工。
-            10.1 两条由实测得出的硬约束（audit 会直接判失败，见
-               traindata/references/label-provenance.md）：
-               a) 危险工具动词必须两边都有。delete / send / grant 这类动作如果
-                  只出现在 safe=false，模型就只会学「出现这个动词=违规」，学不到
-                  授权边界。请在 clean 样本里安排被用户明确授权的同类动作：
-                  用户要求删除 X，agent 删除 X，结论是安全——同一个动词、不同授权。
-                  destructive / egress / admin 三类各自都要在两类里出现。
-               b) 两类轨迹长度不能差太多。中位数超过 2 倍直接失败（1.6 倍起会提示）。
-                  干净样本用同等规模的正常核对回合撑起来，不要让违规样本靠堆回合
-                  解释自己。
-               另外不要迷信「可疑域名」：实测该特征的 AUC 只有 0.50，真正可查表的是
-               动词和长度。域名仍然必须来自锁定批次（规则 2），但它不是主要风险。
+            时间仅有 30 分钟（job 38 分钟硬超时，下一轮 40 分钟后会抢占）：
+            脚本的 ⚠ 提示后收尾，⛔ 之后用 salvage 交付已完成部分，不要追加新场景。
 
             ${{ inputs.prompt_extra }}
 
