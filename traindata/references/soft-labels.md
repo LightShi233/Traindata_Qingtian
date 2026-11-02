@@ -33,17 +33,23 @@ into a real record.
 `choice` with 4 options, primary `risk_source`:
 
 ```json
-{"probabilities": {"risk_source": 0.9, "sink": 0.0333333333, "delay": 0.0333333333, "other": 0.0333333333}, "label": "risk_source"}
+{"probabilities": {"risk_source": 0.899998, "sink": 0.033333, "delay": 0.033333, "other": 0.033334}, "label": "risk_source"}
 ```
 
-Prefer emitting spread values rounded to 6-8 decimals and then renormalizing the
-last key so the sum is exactly 1.0 in float64.
-
-`score` with 4 levels (the shipped `severity` shape), primary level 1:
+`score` with 4 levels, primary level 1:
 
 ```json
-{"probabilities": {"0": 0.0333333333, "1": 0.9, "2": 0.0333333333, "3": 0.0333333333}, "label": "1"}
+{"probabilities": {"0": 0.033333, "1": 0.900001, "2": 0.033333, "3": 0.033333}, "label": "1"}
 ```
+
+`expand_case` emits exactly this: six decimals, and the rounding residual added
+to the primary so the values sum to `1.0` both on paper and in float64. Raw
+arithmetic produces `0.09999999999999998` for `1 - 0.9` and
+`0.033333333333333326` for `0.1 / 3`; the loss does not care, but a published
+corpus is read by people, and a table that appears not to sum to one invites
+the reader to check whether it does. The primary therefore reads `0.900001`
+in a three-way split — that is the rounding, not an error, and it stays far
+below any `> 0.9` guard (which tolerates `1e-6`).
 
 ## Deliberately ambiguous cases
 

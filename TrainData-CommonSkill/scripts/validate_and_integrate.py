@@ -528,6 +528,26 @@ def check_case(case, where, args, state):
     return errs
 
 
+# Probabilities are written with 6 decimals, not as raw float arithmetic:
+# ``1 - 0.9`` is 0.09999999999999998, and ``0.1 / 3`` is 0.033333333333333326.
+# The training loss does not care, but a published corpus is read by people, and
+# a distribution that does not visibly sum to 1 invites the reader to check
+# whether it does. Round, then put the residual on the largest entry so the sum
+# is exactly 1.0 in float64 as well.
+PROB_DECIMALS = 6
+
+
+def tidy_distribution(probs):
+    """Round a probability mapping and absorb the rounding error in the top key."""
+    keys = list(probs)
+    rounded = {k: round(float(probs[k]), PROB_DECIMALS) for k in keys}
+    drift = round(1.0 - sum(rounded.values()), PROB_DECIMALS)
+    if drift:
+        top = max(keys, key=lambda k: probs[k])
+        rounded[top] = round(rounded[top] + drift, PROB_DECIMALS)
+    return rounded
+
+
 def case_answer(case, qid, question):
     """The case's answer for one question, in the form a condition compares."""
     if question.get("type") == "noul":
@@ -660,6 +680,7 @@ def expand_case(case, index, taxonomy):
             k = str(case[qid])
             probs = {kk: (primary if kk == k else rest / (len(keys) - 1)) for kk in keys}
             label = k
+        probs = tidy_distribution(probs)
         # Fail closed even if a caller skipped check_case: a lowered primary must
         # never move the argmax off the label.
         if label not in probs or probs[label] < max(probs.values()):
