@@ -219,9 +219,15 @@ Tips that make this work in practice:
 
   ```bash
   python3 traindata/scripts/data_writer.py allocate --count 1
-  python3 traindata/scripts/data_writer.py write --round <id> \
-    --name chunk_0001 --in data/inbox/chunk_0001.yaml --taxonomy data/taxonomy.json
+  # one call: write + validator(yaml) + validator(jsonl) + audit + salt
+  python3 traindata/scripts/data_writer.py gate --round <id> --name chunk_0001
   ```
+
+  `gate` runs every check for one chunk and prints one PASS/FAIL line per gate
+  plus a single verdict; its exit code is the decision. Use it instead of
+  hand-assembling the four commands — a hand-written audit is the usual way
+  `--require-salt` or the email batch gets dropped. `write` on its own still
+  exists for the case where you want to convert before auditing.
 
   `allocate` names chunks from `chunk_0001` on a clean root, or after the
   highest number already allocated; always pass the name it printed, not the

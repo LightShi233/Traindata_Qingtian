@@ -150,29 +150,27 @@ python3 traindata/scripts/data_writer.py allocate --count 1 \
 #    two disagree the generator spends its turns reconciling them instead of
 #    writing cases.
 
-# 2. write the model's YAML to that exact path, then gate the YAML itself
-#    (no --require-salt yet: the host stamp does not exist before write)
+# 2. write the model's YAML to that exact path, then run every check in one call.
+#    `gate` does: write (stamps meta.salted, verifies the locked email batch and
+#    the schema) -> validator on the YAML -> validator on the JSONL -> audit
+#    (--require-salt, plus the round's registered email batch, rebuilt for you)
+#    -> salt check. It prints one PASS/FAIL line per gate and one verdict line,
+#    and exits non-zero if any of them failed.
+python3 traindata/scripts/data_writer.py gate --round r-2026... \
+  --name chunk_0001 --taxonomy data/taxonomy.json
+
+# 2b. ONLY if a gate failed: discard, fix the YAML, then run the same gate again
+#     (it re-writes the slot). A passing chunk skips this step.
+python3 traindata/scripts/data_writer.py discard --round r-2026... \
+  --name chunk_0001 --reason audit:injection_surface
+
+# 2c. Optional, when you want to know whether the YAML is even close BEFORE it
+#     becomes a chunk (the audit cannot require the salt stamp yet):
 python3 traindata/scripts/validate_and_integrate.py --check data/inbox/chunk_0001.yaml \
   --taxonomy data/taxonomy.json --expand --require-complete-cases --timeout 300
 python3 traindata/scripts/audit_diversity.py --chunks data/inbox/chunk_0001.yaml \
   --taxonomy data/taxonomy.json --require-injection --strict --require-taxonomy-axes \
   --email-manifest work/emails.json --timeout 300
-
-# 3. convert in place (this is where meta.salted is stamped)
-python3 traindata/scripts/data_writer.py write --round r-2026... \
-  --name chunk_0001 --in data/inbox/chunk_0001.yaml --taxonomy data/taxonomy.json
-
-# 4. re-run both gates on the written chunk, now with --require-salt
-python3 traindata/scripts/validate_and_integrate.py --check data/chunks/chunk_0001.jsonl \
-  --taxonomy data/taxonomy.json --expand --require-complete-cases --timeout 300
-python3 traindata/scripts/audit_diversity.py --chunks data/chunks/chunk_0001.jsonl \
-  --taxonomy data/taxonomy.json --require-injection --strict --require-taxonomy-axes \
-  --require-salt --email-manifest work/emails.json --timeout 300
-
-# 4b. ONLY if a gate failed: discard, fix the YAML, rewrite the same name,
-#     then repeat step 4. A passing chunk skips this step.
-python3 traindata/scripts/data_writer.py discard --round r-2026... \
-  --name chunk_0001 --reason audit:injection_surface
 
 # 5. merge ONLY this round's written chunks (never a glob over all chunks)
 python3 traindata/scripts/data_writer.py merge --round r-2026... \

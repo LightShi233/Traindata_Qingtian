@@ -126,6 +126,11 @@ jobs:
             协作方式（已经写死在脚本里，脚本会自己打印，照抄即可）：
             - 用 allocate --count 5 --workers a1 a2 a3 a4 a5 --budget-hours 0.5
               一次分配 5 个槽位，把打印出的「子代理契约」原样放进每个子代理的任务。
+            - 每个 slot 只需要一条检查命令：gate --round <id> --name <名字>
+              它一次跑完 write + 两个 validator + audit + salt，每个 gate 打一行
+              PASS/FAIL，最后一行是总判决；退出码非 0 就按报错改 YAML 再跑同一条。
+            - 不要自己去拼 validate_and_integrate / audit_diversity / salt 的参数：
+              gate 已经带齐，手拼出来的命令容易漏掉 --require-salt 或邮箱批次。
             - 子代理只做三件事：claim 槽位、写一个 YAML、回显 traj_id/payload_span。
             - write 和两个 gate 只由你执行，以它们的退出码为准；子代理自述不算证据。
             - 子代理全部返回后逐个 write + 跑 gate，处理完每个槽位再结束。
