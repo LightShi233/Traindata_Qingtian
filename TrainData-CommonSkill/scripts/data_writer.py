@@ -65,6 +65,8 @@ from dataloader import (  # noqa: E402
     atomic_write_text,
     read_text,
 )
+import audit_diversity as ad  # noqa: E402
+import salt as salt_mod  # noqa: E402
 import validate_and_integrate as vi  # noqa: E402
 import yaml_to_jsonl as y2j  # noqa: E402
 
@@ -706,6 +708,184 @@ def cmd_write(args):
 
 
 # --------------------------------------------------------------------------- #
+# gate: write + every gate for one chunk, in one call
+# --------------------------------------------------------------------------- #
+def _materialise_email_batch(data_dir, manifest, round_id):
+    """Write the round's registered batch to a scratch file for the audit."""
+    batch = manifest.get("email_batch") or []
+    if not batch:
+        return None
+    doc = {"emails": list(batch)}
+    if manifest.get("email_pairs"):
+        doc["pairs"] = manifest["email_pairs"]
+    path = os.path.join(data_dir, "rounds", f".email_batch_{round_id}.json")
+    atomic_write_text(path, json.dumps(doc, ensure_ascii=False, indent=1))
+    return path
+
+
+def run_gate(data_dir, round_id, name, taxonomy, timeout, email_manifest=None,
+             redact=False, ruhui_max_len=1024, convert=True):
+    """Write one chunk (optionally) and run every gate that decides acceptance.
+
+    Why this exists: the checks themselves are cheap, but each one is a separate
+    command, and an orchestrator walking eight slots re-derives "what do I run
+    next" eight times. That reasoning is the expensive part, not the scripts.
+    One call does the whole sequence and prints one verdict line per gate plus a
+    single exit code, so the decision is *read*, not *derived*.
+
+    Order matters and is not configurable:
+      1. ``write`` (skipped with ``convert=False`` when the chunk already exists)
+         — host salt stamp, locked email batch, schema;
+      2. ``validate_and_integrate.py --check --expand --require-complete-cases``;
+      3. ``audit_diversity.py --require-injection --strict --require-taxonomy-axes
+         --require-salt`` (plus the e-mail manifest when one is registered);
+      4. ``salt.py --check``.
+    A ``write`` refusal stops immediately: later gates read a file that does not
+    exist. Any later failure does not stop the run — every gate is reported, so
+    one round trip shows all the problems instead of one at a time.
+
+    Returns 0 only when every step passed, 3 on timeout, 1 otherwise.
+    """
+    data_dir = os.path.abspath(data_dir)
+    if not ROUND_RE.match(round_id):
+        raise SystemExit(f"非法 round id: {round_id!r}")
+    manifest = load_round(data_dir, round_id)
+    if manifest is None:
+        raise SystemExit(f"没有这个 round: {round_id}；先运行 allocate")
+    allocation = next((a for a in manifest["allocations"] if a["name"] == name), None)
+    if allocation is None:
+        _reject_foreign_name(data_dir, round_id, name)
+        raise SystemExit(f"{name} 不属于 round {round_id}；先运行 allocate")
+    yaml_path = _abs(data_dir, allocation["yaml"])
+    jsonl_path = _abs(data_dir, allocation["jsonl"])
+    taxonomy = taxonomy or os.path.join(data_dir, "taxonomy.json")
+    if not os.path.exists(taxonomy):
+        raise SystemExit(f"taxonomy 不存在: {taxonomy}（用 --taxonomy 指定）")
+    with open(taxonomy, encoding="utf-8-sig") as f:
+        taxonomy_obj = json.load(f)
+    # The round manifest already snapshots the locked batch; the audit needs it
+    # as a file. Rebuild it rather than make the caller remember to pass the same
+    # path twice — forgetting it is a guaranteed locked-batch failure.
+    email_manifest = email_manifest or _materialise_email_batch(data_dir, manifest, round_id)
+
+    results = []
+    already_written = os.path.exists(jsonl_path)
+    if already_written and convert:
+        convert = False
+        print(f"[gate] {name} 已存在，跳过 write（要重写请先 discard）")
+
+    if convert:
+        if not os.path.exists(yaml_path):
+            print(f"[gate] FAIL write: YAML 不存在 {_display(yaml_path)}")
+            print(AUTHORITY_NOTICE)
+            return 1
+        print("[gate] step 1/5 write（盖 salt 章、校验锁定批次与 schema）")
+        write_args = argparse.Namespace(
+            data_dir=data_dir, round=round_id, name=name, infile=yaml_path,
+            taxonomy=taxonomy, timeout=timeout, ruhui_max_len=ruhui_max_len,
+            worker=None)
+        rc = cmd_write(write_args)
+        results.append(("write", rc))
+        if rc != 0:
+            print(f"[gate] {name}: write 被拒绝（退出码 {rc}），后续 gate 需要 JSONL，已停止")
+            return rc
+    else:
+        results.append(("write", 0))
+    if not os.path.exists(jsonl_path):
+        print(f"[gate] FAIL write: {_display(jsonl_path)} 不存在")
+        return 1
+
+    deadline = Deadline(timeout)
+    checks = []
+
+    def step(label, func):
+        if deadline and timeout:
+            try:
+                deadline.check(label)
+            except TimeoutError as exc:
+                print(f"[gate] TIMEOUT {label}: {exc}")
+                checks.append((label, 3))
+                return 3
+        try:
+            rc = func()
+        except TimeoutError as exc:
+            print(f"[gate] TIMEOUT {label}: {exc}")
+            rc = 3
+        checks.append((label, rc))
+        print(f"[gate] {'PASS' if rc == 0 else 'FAIL'} {label} (exit {rc})")
+        return rc
+
+    # The validator is the authority, so call its CLI rather than re-assembling
+    # a Namespace: passing a partial one silently skipped checks (the CLI sets
+    # intra/leak/taxonomy itself) and reported PASS on a chunk the standalone
+    # command rejects. One implementation, one set of defaults.
+    def validator(target):
+        def run():
+            saved = sys.argv
+            sys.argv = ["validate_and_integrate.py", "--check", target,
+                        "--taxonomy", taxonomy, "--expand",
+                        "--require-complete-cases", "--timeout", str(timeout)]
+            try:
+                vi.main()
+                return 0
+            except SystemExit as exc:
+                return int(exc.code or 0)
+            finally:
+                sys.argv = saved
+        return run
+
+    # Two views of the same file: the YAML source (pre-write convention) and the
+    # JSONL the host produced. Gating the JSONL is what the round actually ships.
+    if os.path.exists(yaml_path):
+        step("validate(yaml)", validator(yaml_path))
+    step("validate(jsonl)", validator(jsonl_path))
+
+    audit_argv = ["--chunks", jsonl_path, "--taxonomy", taxonomy,
+                  "--require-injection", "--strict", "--require-taxonomy-axes",
+                  "--require-salt"]
+    if email_manifest and os.path.exists(email_manifest):
+        audit_argv += ["--email-manifest", email_manifest]
+    if redact:
+        audit_argv.append("--redact")
+    if timeout:
+        audit_argv += ["--timeout", str(timeout)]
+
+    def a_jsonl():
+        saved = sys.argv
+        sys.argv = ["audit_diversity.py"] + audit_argv
+        try:
+            return ad.main()
+        except SystemExit as exc:
+            return int(exc.code or 0)
+        finally:
+            sys.argv = saved
+    step("audit", a_jsonl)
+
+    def s_check():
+        try:
+            return salt_mod.do_check([jsonl_path], timeout)
+        except SystemExit as exc:
+            return int(exc.code or 0)
+    step("salt", s_check)
+
+    failed = [label for label, rc in checks + results if rc != 0]
+    print()
+    if failed:
+        print(f"[gate] VERDICT {name}: FAIL ({', '.join(failed)})")
+        print(f"  修好 YAML 后重跑同一条 gate 命令；已写入的 chunk 不会被覆盖。")
+        print(AUTHORITY_NOTICE)
+        return 3 if any(rc == 3 for _, rc in checks) else 1
+    print(f"[gate] VERDICT {name}: PASS ({len(checks)} gates + write)")
+    return 0
+
+
+def cmd_gate(args):
+    return run_gate(args.data_dir, args.round, args.name, args.taxonomy, args.timeout,
+                    email_manifest=args.email_manifest, redact=args.redact,
+                    ruhui_max_len=args.ruhui_max_len)
+
+
+# --------------------------------------------------------------------------- #
 # discard
 # --------------------------------------------------------------------------- #
 def cmd_discard(args):
@@ -1087,29 +1267,24 @@ BRIEF = """\
        不能剩下 pending：能过就 write，过不了就 discard。
        （真实事故：4 个子代理都交了 YAML，主代理只 write 了 2 个就结束。）
   2. 写 YAML（一个 chunk 一个文件，不要写 jsonl、不要写别的路径）
-  3. 先过一遍网关（YAML 可直接被读取；预检不要带 --require-salt，salt 章还没盖）：
-       validate_and_integrate.py --check <yaml> --taxonomy data/taxonomy.json
-         --expand --require-complete-cases --timeout 300
-       audit_diversity.py --chunks <yaml> --taxonomy data/taxonomy.json
-         --require-injection --strict --require-taxonomy-axes
-         --email-manifest <path> --timeout 300
-       跨 chunk 泄漏：validator 加 --leak data/rounds/<其它轮>/soft_*.jsonl
-       （--auto-leak 只搜输入旁边，round 产物在 rounds/ 下，搜不到）。
-  4. write --round <id> --name chunk_NNNN --in <那个 yaml>   （此时才盖 salt 章）
-  5. 再跑一遍上面的两个网关，这次 audit 加 --require-salt；
-     再运行 salt.py --check <chunk> 确认每个 case 都有宿主章
-  6. merge --round <id>      （只合并 written，discarded/pending 自动跳过）
-  7. check --round <id> --strict
+  3. 一个命令跑完全部检查（write + validator + audit + salt）：
+       gate --round <id> --name <名字>
+     它先 write（盖 salt 章、校验锁定批次与 schema），再依次跑 validator(yaml)、
+     validator(jsonl)、audit（自动带上本轮的邮箱批次与 --require-salt）、salt 检查，
+     每个 gate 打一行 PASS/FAIL，最后一行是总判决。
+     只在一种情况下有必要拆开手跑：想先看 YAML 会不会过、不想先 write。
+  4. merge --round <id>      （只合并 written，discarded/pending 自动跳过）
+  5. check --round <id> --strict
   超时由脚本判定：warn 收尾，stop 用 salvage 交付已完成部分。
   这个工具不接触版本控制：产物写进输出目录就结束，归档由调用方负责。
   脚本退出码是唯一权威：0 通过，非 0 未通过。不要改检查来让它变绿。
   data/taxonomy.json 是跨 chunk 的稳定契约，不要修改；改了已通过的数据全部失效。
 
 网关失败后的唯一正确动作（不要 rm、不要手改 jsonl、不要放宽阈值）：
-  - write 之前就失败：直接改 YAML，重跑第 3 步
-  - write 之后才失败：discard --round <id> --name <name> --reason <失败码>
+  - gate 报 write 失败：直接改 YAML，重跑同一条 gate
+  - gate 报后面的 gate 失败：discard --round <id> --name <name> --reason <失败码>
     它只删该 chunk 的 JSONL、保留 YAML 并把槽位退回 pending；改好 YAML 后
-    用同一个 --name 重跑 write，再 merge。（已 merge 的话重写后必须重新 merge）
+    重跑 gate（会重新 write），再 merge。（已 merge 的话重写后必须重新 merge）
   - 退出码 3 = 超时：缩小 chunk 或拆分重试，不要加大 --timeout
 
 小 chunk 的数学下限（先算再写，避免白转）：
@@ -1117,6 +1292,8 @@ BRIEF = """\
     至少 3 个注入样本 + 3 种 surface + 3 种 payload_style。
   - request_shape / harm_kind 各 ≤40%：7 个 case 无解（最多 2/2/3 分布），
     pilot 至少 8 个 case 才能把所有轴排开。
+  - harm_kind=none 也受 40% 限制（8 个 case 最多 3 个）。clean case 不一定标 none：
+    resist 了注入的 clean case 要标输入里的那个类别，否则 harm_kind 退化成 is_violation 的复述。
   - --strict 还要求每个 choice key 和每个 score level 至少出现一次。起步用 8-case 矩阵。
 
 地址规则（最容易被绕过的一条）：
@@ -1543,6 +1720,18 @@ def main():
     claim.add_argument("--name", required=True, help="allocate 打印的名字，逐字复制")
     claim.add_argument("--worker", required=True, help="认领它的子代理标签")
     claim.set_defaults(func=cmd_claim)
+
+    gate = sub.add_parser(
+        "gate", help="write + 全部 gate 一次跑完（validator / audit / salt），只返回一个退出码")
+    gate.add_argument("--round", required=True)
+    gate.add_argument("--name", required=True, help="allocate 打印的名字，逐字复制")
+    gate.add_argument("--taxonomy", default=None)
+    gate.add_argument("--email-manifest", default=None,
+                      help="审计用的地址白名单；未给时从 round 清单里按轮次查找")
+    gate.add_argument("--redact", action="store_true", help="隐藏失败信息里的原文摘录")
+    gate.add_argument("--ruhui-max-len", type=int, default=1024)
+    gate.add_argument("--timeout", type=float, default=300.0)
+    gate.set_defaults(func=cmd_gate)
 
     sub.add_parser("list-dirs", help="列出工作目录里可作为输出根目录的候选").set_defaults(
         func=cmd_list_dirs)

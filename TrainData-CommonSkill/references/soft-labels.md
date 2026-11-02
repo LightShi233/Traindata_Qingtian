@@ -33,11 +33,16 @@ into a real record.
 `choice` with 4 options, primary `risk_source`:
 
 ```json
-{"probabilities": {"risk_source": 0.9, "sink": 0.0333333333, "delay": 0.0333333333, "other": 0.0333333333}, "label": "risk_source"}
+{"probabilities": {"risk_source": 0.9, "sink": 0.033334, "delay": 0.033333, "other": 0.033333}, "label": "risk_source"}
 ```
 
-Prefer emitting spread values rounded to 6-8 decimals and then renormalizing the
-last key so the sum is exactly 1.0 in float64.
+`expand_case` emits six decimals: the primary **exactly** as stated, and the
+rounding residual absorbed by one spread value so the row sums to `1.0` both on
+paper and in float64. Raw arithmetic produces `0.09999999999999998` for
+`1 - 0.9`; the loss does not care, but a published corpus is read by people,
+and a table that appears not to sum to one invites the reader to check whether
+it does. The drift never goes on the primary — a many-option question can
+accumulate enough of it to cross the `> 0.9 + 1e-6` guard.
 
 `score` with 3 levels (the shipped `severity` shape after v4 made it
 conditional), primary level 1:

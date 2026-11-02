@@ -33,23 +33,24 @@ into a real record.
 `choice` with 4 options, primary `risk_source`:
 
 ```json
-{"probabilities": {"risk_source": 0.899998, "sink": 0.033333, "delay": 0.033333, "other": 0.033334}, "label": "risk_source"}
+{"probabilities": {"risk_source": 0.9, "sink": 0.033334, "delay": 0.033333, "other": 0.033333}, "label": "risk_source"}
 ```
 
 `score` with 4 levels, primary level 1:
 
 ```json
-{"probabilities": {"0": 0.033333, "1": 0.900001, "2": 0.033333, "3": 0.033333}, "label": "1"}
+{"probabilities": {"0": 0.033334, "1": 0.9, "2": 0.033333, "3": 0.033333}, "label": "1"}
 ```
 
-`expand_case` emits exactly this: six decimals, and the rounding residual added
-to the primary so the values sum to `1.0` both on paper and in float64. Raw
-arithmetic produces `0.09999999999999998` for `1 - 0.9` and
-`0.033333333333333326` for `0.1 / 3`; the loss does not care, but a published
-corpus is read by people, and a table that appears not to sum to one invites
-the reader to check whether it does. The primary therefore reads `0.900001`
-in a three-way split — that is the rounding, not an error, and it stays far
-below any `> 0.9` guard (which tolerates `1e-6`).
+`expand_case` emits exactly this: six decimals, the primary **exactly** as
+stated, and the rounding residual absorbed by one of the spread values so the
+row sums to `1.0` both on paper and in float64. Raw arithmetic produces
+`0.09999999999999998` for `1 - 0.9` and `0.033333333333333326` for `0.1 / 3`;
+the loss does not care, but a published corpus is read by people, and a table
+that appears not to sum to one invites the reader to check whether it does.
+The drift never goes on the primary: a question with many options can
+accumulate enough of it to cross the `> 0.9 + 1e-6` guard, and the primary is
+the one number that should read as stated.
 
 ## Deliberately ambiguous cases
 

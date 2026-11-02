@@ -538,13 +538,27 @@ PROB_DECIMALS = 6
 
 
 def tidy_distribution(probs):
-    """Round a probability mapping and absorb the rounding error in the top key."""
+    """Round a probability mapping and absorb the rounding error off the primary.
+
+    The drift goes to the largest *non-primary* entry, never to the primary.
+    The primary is the label's stated confidence (0.9, or a recorded 0.7), and
+    it must stay exactly that number: adding a 1e-6 rounding residual pushed it
+    to 0.900001, which is at the validator's ``> 0.9 + 1e-6`` boundary and, for
+    a question with many options, would cross it. The spread values are already
+    "0.1 divided up", so a few micro-units of unevenness there is harmless.
+    """
     keys = list(probs)
+    primary = max(keys, key=lambda k: probs[k])
     rounded = {k: round(float(probs[k]), PROB_DECIMALS) for k in keys}
     drift = round(1.0 - sum(rounded.values()), PROB_DECIMALS)
-    if drift:
-        top = max(keys, key=lambda k: probs[k])
-        rounded[top] = round(rounded[top] + drift, PROB_DECIMALS)
+    if drift and len(keys) > 1:
+        others = [k for k in keys if k != primary]
+        target = max(others, key=lambda k: rounded[k])
+        adjusted = round(rounded[target] + drift, PROB_DECIMALS)
+        if adjusted < 0:  # only reachable with a pathological option count
+            rounded[primary] = round(rounded[primary] + drift, PROB_DECIMALS)
+        else:
+            rounded[target] = adjusted
     return rounded
 
 
@@ -927,14 +941,21 @@ def load_corrections(path):
         text = fh.read()
     stripped = text.lstrip()
     estimate = None
-    if stripped.startswith("["):
-        rows = json.loads(stripped)
-    elif stripped.startswith("{"):
+    doc = None
+    try:
         doc = json.loads(stripped)
+    except json.JSONDecodeError:
+        doc = None
+    if isinstance(doc, list):
+        rows = doc
+    elif isinstance(doc, dict):
         rows = doc.get("corrections") if isinstance(doc.get("corrections"), list) else [doc]
         if isinstance(doc.get("estimate"), dict):
             estimate = doc["estimate"]
     else:
+        # JSONL: a series of objects, which also starts with "{" but is not one
+        # JSON document. Parsing the whole text first and falling back here is
+        # what keeps both shapes working.
         rows = [json.loads(line) for line in text.splitlines() if line.strip()]
     confirmed, rejected, tiers = 0, 0, Counter()
     for row in rows:

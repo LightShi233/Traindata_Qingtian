@@ -440,11 +440,11 @@ def check_chunk_geometry(parsed, audit, args):
     Two caps are structural, so a chunk beyond a certain size cannot satisfy
     them no matter what the model writes:
 
-    - ``harm_kind``: a clean case carries ``none`` (that is the kind present in
-      its input), so ``none`` is at least the clean count. With ``safe=false``
-      capped at 50% and ``none`` capped at 40%, the workable shape is **8 clean
-      / 7 violating** in 15 cases or **4 clean / 6 violating** in 10; a 50/50
-      split of 10 needs ``none`` at exactly 5/10 = 50% and fails.
+    - ``harm_kind``: ``none`` may appear at most ``floor(0.4n)`` times. A clean
+      case contributes to ``none`` only when its input contains no harmful
+      category at all; a clean case that resisted an injected instruction
+      carries that kind instead. So a 50/50 split is legal only if enough clean
+      cases are resisted injections (for 10 cases: at most 4 none).
     - ``entity_family``: capped at 25%, so an 8-case chunk needs 8 distinct
       families; anything looser fails before the content is read.
 
@@ -461,16 +461,19 @@ def check_chunk_geometry(parsed, audit, args):
                                "超过后 40%/25% 的集中度上限已不可能同时满足，"
                                "请把 chunk 缩小或拆成两块")
 
-    clean = sum(1 for _, c, _ in parsed if c.get("safe") is True)
-    share = clean / n
-    if share > args.max_harm_kind_share:
-        cap = int(math.floor(args.max_harm_kind_share * n + 1e-9))
+    # The cap is on ``harm_kind == none``, not on the clean count. A clean case
+    # that resisted an injected instruction still carries the kind present in
+    # its input, so it does not count as ``none``; a clean case with no harmful
+    # content at all does. That is why "5 clean" is not automatically "5 none".
+    none_cases = sum(1 for _, _, m in parsed if m.get("harm_kind") == "none")
+    cap = int(math.floor(args.max_harm_kind_share * n + 1e-9))
+    if none_cases > cap:
         audit.fail("geometry",
-                   f"clean 有 {clean}/{n} 个（{share:.0%}），但每个 clean case 的 "
-                   f"harm_kind 都是 none，而 none 的占比上限是 "
-                   f"{args.max_harm_kind_share:.0%}；n={n} 时 clean 最多 {cap} 个。"
-                   f"按 40%/{'50%' if args.max_unsafe_share >= 0.5 else f'{args.max_unsafe_share:.0%}'}"
-                   f" 反推：10 个 case 应为 4 clean / 6 violating（或 15 个时 8/7）")
+                   f"meta.harm_kind=none 的 case 有 {none_cases}/{n} 个"
+                   f"（{none_cases/n:.0%}），超过上限 {args.max_harm_kind_share:.0%}"
+                   f"（n={n} 时最多 {cap} 个）。两条合法路径：减少「输入里没有任何危害类别」"
+                   "的 clean case，或者让部分 clean case 承载 resisted injection，"
+                   "此时 meta.harm_kind 取输入里的那个类别（不是 none）")
 
     entity = Counter(m.get("entity_family") for _, _, m in parsed if m.get("entity_family"))
     if entity:
@@ -577,6 +580,28 @@ def check_harm_taxonomy(parsed, audit, args):
     if n >= 6 and len(kinds) < 3:
         audit.warn("taxonomy", f"harm_kind 只有 {sorted(kinds)}；建议 ≥3 种（见 taxonomy-design.md）")
 
+
+def check_harm_label_consistency(parsed, audit):
+    """A clean case that resisted a harmful input must not say harm is absent.
+
+    ``meta.harm_kind`` names the kind present in the *input*; the head of the
+    same name asks which kind is present in the trajectory. For a clean case
+    that resisted an injected instruction, the kind is still there — the agent
+    declined to act on it — so the label must be that kind, not ``none``.
+    Labelling it ``none`` makes the head a restatement of ``is_violation``
+    (clean ⇒ none) and throws away the only signal that separates "no harmful
+    content" from "harmful content correctly resisted".
+    """
+    for where, c, m in parsed:
+        if c.get("safe") is not True:
+            continue
+        meta_kind = m.get("harm_kind")
+        head_kind = c.get("harm_kind")
+        if meta_kind and meta_kind != "none" and head_kind == "none":
+            audit.fail("harm-label",
+                       f"{where}: safe=true 且 meta.harm_kind={meta_kind}（输入里存在该类别），"
+                       "但 harm_kind 标签是 none；resisted injection 也要标输入里的类别，"
+                       "否则 harm_kind 退化成 is_violation 的复述")
 
 def check_payloads(parsed, audit, args):
     inj = [(w, c, m) for w, c, m in parsed if m.get("injection_present") is True]
@@ -1265,6 +1290,30 @@ def load_email_pool(dirpath):
     return pool, block, freemail, stats
 
 
+def _manifest_entries(doc):
+    """(addresses, pairs) from any of the whitelist shapes this project writes.
+
+    A round manifest stores the snapshot as ``email_batch``/``email_pairs``; a
+    sampled batch uses ``emails``/``pairs``; a per-chunk plan is a list of
+    ``{chunk, pairs}``. All three are the same whitelist, so accept all three
+    instead of failing on the one the caller happened to have.
+    """
+    if isinstance(doc, dict):
+        emails = doc.get("emails")
+        if not isinstance(emails, list):
+            emails = doc.get("email_batch") or []
+        pairs = doc.get("pairs")
+        if not isinstance(pairs, list):
+            pairs = doc.get("email_pairs") or []
+        return [str(e) for e in emails], pairs
+    if isinstance(doc, list):
+        pairs = [p for item in doc if isinstance(item, dict)
+                 for p in (item.get("pairs") or []) if isinstance(p, dict)]
+        emails = [str(a) for p in pairs for a in (p.get("addresses") or [])]
+        return emails, pairs
+    return [], []
+
+
 def check_email_manifest(parsed, path, audit):
     """The manifest is a LOCKED whitelist.
 
@@ -1293,10 +1342,13 @@ def check_email_manifest(parsed, path, audit):
     except (OSError, json.JSONDecodeError) as e:
         audit.fail("cross-map", f"无法读取 email manifest {path}: {e}")
         return
-    allowed = {e.lower() for e in man.get("emails", [])}
-    pairs = man.get("pairs") or []
+    emails_doc, pairs = _manifest_entries(man)
+    allowed = {e.lower() for e in emails_doc}
     if not allowed:
-        audit.fail("cross-map", f"email manifest {path} 没有 emails；用 sample_emails.py --manifest 生成")
+        audit.fail("cross-map",
+                   f"email manifest {path} 里没有地址。接受三种形态："
+                   "sample_emails.py 的 {emails, pairs}、round 清单的 "
+                   "{email_batch, email_pairs}、或按 chunk 分组的 [{\"pairs\": [...]}]")
         return
 
     used = Counter()
@@ -1475,6 +1527,7 @@ def main():
         check_chunk_geometry(parsed, audit, args)
         check_diversity(parsed, audit, args)
         check_harm_taxonomy(parsed, audit, args)
+        check_harm_label_consistency(parsed, audit)
         check_payloads(parsed, audit, args)
         check_payload_locations(parsed, audit)
         check_benign_directives(parsed, audit)

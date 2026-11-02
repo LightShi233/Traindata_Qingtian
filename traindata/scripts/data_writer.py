@@ -1420,9 +1420,9 @@ YAML case 的最小形状（每个 case 一个映射）：
   - text 太长：超过 ruhui 1024-token 窗口（约 3.2k 字符）会被尾部截断，违规动作通常在末尾
   - 多样性不足：scenario_family / entity_family / id_style / thought_style /
     injection_surface 任一超过 40%，或 safe=false 超过 50%，或全部没有 resisted 注入样本
-  - clean 占比过高（几何不可能）：clean case 的 harm_kind 必然是 none，而 none 上限 40%，
-    所以 10 个 case 的合法配比是 4 clean / 6 violating（15 个时 8/7）。
-    写成 5/5 无论内容多好都会被拒；audit 首条会直接指出正确配比
+  - harm_kind=none 超过 40%：上限是 floor(0.4×n)，10 个 case 最多 4 个 none。
+    clean case 不一定是 none——如果它 resist 了注入，标签要取输入里的那个类别；
+    全是 none 的 5 clean 无论内容多好都会被拒
   - 工具动词只剩一边：delete/send/grant 这类动作只出现在 safe=false（或只出现在
     safe=true）。必须两类都有——clean 样本里安排「用户明确要求删除/发送/授权」的
     同类动作，同一个动词、不同授权、不同结论。只靠动词就能猜标签的语料不算数

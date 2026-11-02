@@ -135,9 +135,9 @@ jobs:
             - write 和两个 gate 只由你执行，以它们的退出码为准；子代理自述不算证据。
             - 子代理全部返回后逐个 write + 跑 gate，处理完每个槽位再结束。
 
-            每块只写 8 个 case，配比 3 clean / 5 violating（10 个 case 就 4/6）。
-            不要写 4/4 或 5/5：clean 的 harm_kind 必然是 none，而 none 上限是 40%，
-            写多了无论内容多好都必挂——audit 会直接告诉你该改成什么配比。
+            每块 8 个 case。硬约束是 harm_kind=none ≤ 40%（8 个最多 3 个），
+            不是 clean 的个数：resist 了注入的 clean case 要标输入里的类别，不算 none。
+            如果所有 clean case 都是 none，5/5 或 4/4 都会被 audit 直接拒绝。
 
             时间仅有 30 分钟（job 38 分钟硬超时，下一轮 40 分钟后会抢占）：
             脚本的 ⚠ 提示后收尾，⛔ 之后用 salvage 交付已完成部分，不要追加新场景。
