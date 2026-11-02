@@ -309,19 +309,25 @@ values, and not something to repair: validating them against v3 must fail, and
   60%; its rows also fall outside the v3 `(choice,7)` / `(score,4)` buckets.
   `merge` already refuses a mixed round. `integrate`/`split` now **hard-fail**
   when the input carries more than one **head shape**, where shape is the head
-  ids **plus each head's option keys** (`severity{0,1,2,3}`), not just the
-  names: a v4 that keeps the same five names and changes an option count would
-  otherwise pass and silently mismatch the temperature buckets. Case-form input
+  ids, each head's option keys (`severity{0,1,2,3}`), **and fingerprints of the
+  instruction and criteria text**. Head names alone miss a v4 that keeps the
+  same five names but changes an option count; keys alone miss a v4 that only
+  rewords the question. All of it is carried verbatim in every record, so the
+  check needs no manifest and no knowledge of the data root. Case-form input
   fails earlier (a missing head is a validation error even without
   `--require-complete-cases`); the record-form path — which is schema-agnostic —
   gets the explicit `head_set_errors` check before anything is written. The
   `INFO` below is a diagnostic, not the safeguard.
-- **The residual gap is same heads, same options, different wording.** If a
-  future version only rewords an instruction, the shape is identical and the
-  check passes: the corpus would carry two wordings for one question id. That
-  is not bucket-breaking, but it is still a mix — group integrations by
-  `taxonomy_version` (`data_writer.py check` names the mismatched chunks) rather
-  than relying on the shape check alone.
+- **What is still invisible: a change outside the record.** If a version change
+  touches neither the head ids, the option keys, the instruction, nor the
+  criteria — e.g. how the trainer interprets a head — the shape is identical and
+  the check passes. That is not a data mix, but it is also not something a
+  corpus gate can see. Keep grouping integrations by `taxonomy_version`
+  (`data_writer.py check` names the mismatched chunks); the shape check is the
+  fallback, not the policy. The one assumption to state: it treats "one head =
+  one instruction template". A taxonomy that intentionally paraphrases a
+  question per case would trip it, and the current taxonomy does not (verified:
+  one instruction hash per head across the corpus).
 - **`data_writer.py check` prints the mismatches** (`INFO [taxonomy-version]`,
   non-failing) so a build run can see which chunks belong to another version
   without opening the manifests.

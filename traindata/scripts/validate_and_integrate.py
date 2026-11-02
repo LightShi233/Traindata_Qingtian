@@ -673,15 +673,22 @@ def completeness_errors(state, taxonomy):
     return errs
 
 
+def _fingerprint(value):
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:8]
+
+
 def case_shape(records):
-    """(question id, option keys) per head — the identity of a taxonomy version.
+    """(question id, option keys, instruction and criteria fingerprints) per head.
 
     Head names alone are not enough: a v4 that keeps the same five names but
     changes an option count (e.g. `severity` 4 levels → 3) has the same head set
     and would pass a name-only check, while its records no longer fit the same
-    temperature bucket. The option keys are carried verbatim in every record's
-    ``soft_label.probabilities``, so including them makes the check detect that
-    change without needing the manifest.
+    temperature bucket. Option keys are carried verbatim in every record; the
+    instruction and criteria are too, so hashing them catches a version that
+    only rewords a question — which head ids and option keys cannot see.
+    Everything here comes from the record itself, so the check needs no manifest
+    and no knowledge of the writer's directory layout.
     """
     shape = []
     for r in records:
@@ -689,23 +696,30 @@ def case_shape(records):
         probs = (r.get("soft_label") or {}).get("probabilities")
         if not isinstance(probs, dict) or qid is None:
             continue
-        shape.append((qid, tuple(sorted(str(k) for k in probs))))
+        shape.append((qid, tuple(sorted(str(k) for k in probs)),
+                      _fingerprint(r.get("instruction")),
+                      _fingerprint(r.get("criteria"))))
     return tuple(sorted(shape))
 
 
 def _shape_summary(shape):
-    return ", ".join(f"{qid}{len(keys)}" for qid, keys in shape)
+    return ", ".join(f"{qid}[{len(keys)}]:i{ins}:c{crit}"
+                     for qid, keys, ins, crit in shape)
 
 
 def head_set_errors(rows):
     """Reject a corpus whose cases do not all carry the same head shape.
 
-    Two things must match across every case: the question ids **and** each
-    question's option keys. Case-form input already fails validation when a head
-    is missing, but the record-form path (``--integrate`` without ``--expand``)
-    is schema-agnostic: a v2 recording and a v3 recording both look like valid
-    records, and a head-name-only check would also miss a same-name,
-    different-arity version. One corpus, one shape.
+    Shape is the question ids, each question's option keys, and fingerprints of
+    its instruction and criteria. Case-form input already fails validation when
+    a head is missing, but the record-form path (``--integrate`` without
+    ``--expand``) is schema-agnostic, and a head-name-only check would miss both
+    a same-name/different-arity version and a reworded question. One corpus,
+    one shape.
+
+    Limitation (documented, not checked): a change that touches nothing inside
+    the record — e.g. how the trainer interprets a head — is invisible here.
+    Group integrations by ``taxonomy_version``; this check is the fallback.
     """
     by_case = defaultdict(list)
     for r in rows:
@@ -715,9 +729,10 @@ def head_set_errors(rows):
     if len(shapes) <= 1:
         return []
     shown = " | ".join(f"[{_shape_summary(s)}] ×{n}" for s, n in shapes.most_common(4))
-    return [f"同一语料里出现 {len(shapes)} 种 head/选项域组合：{shown}。"
-            "这要么是不同 taxonomy 版本混在一起，要么是同一 head 改了选项数；"
-            "两种都会让温度桶错配。按 round 的 taxonomy_version 分开整合"]
+    return [f"同一语料里出现 {len(shapes)} 种 head/选项域/措辞组合：{shown}。"
+            "这要么是不同 taxonomy 版本混在一起，要么是同一 head 改了选项数或措辞"
+            "（i=instruction 指纹, c=criteria 指纹）；都会让训练信号错配。"
+            "按 round 的 taxonomy_version 分开整合"]
 
 
 def collect(paths, args, expand=False):
