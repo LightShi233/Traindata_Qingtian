@@ -37,3 +37,7 @@ AGENTS.md
 *_ed25519
 id_rsa
 id_ed25519
+
+# the standalone copy carries its own output root and scratch dir
+/TrainData-CommonSkill/data/
+/TrainData-CommonSkill/work/

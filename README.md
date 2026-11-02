@@ -7,6 +7,10 @@ anti-shortcut diversity audit, a welded email library (normal free mail,
 invented corporate domains, disposable/toxic domains, abuse contacts) and a
 compositional name/role vocabulary for generating email local parts.
 
+[`TrainData-CommonSkill/`](TrainData-CommonSkill/) is the same skill without the
+deployment: no CI, no private corpus repository, no run/commit ids, and no
+project-root confinement. Use it standalone; see its README.
+
 ## License
 
 GPL-3.0. See [LICENSE](LICENSE).

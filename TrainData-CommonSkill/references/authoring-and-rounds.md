@@ -1,0 +1,458 @@
+# Authoring, record schema, and the round workflow
+
+Stable procedure extracted from `SKILL.md` so the main body stays short. Read this
+when you are about to write a chunk, convert YAML, or run the round commands.
+Every term used here (case, head, qtype, soft label, state, round, `meta`) is
+defined in `references/glossary.md`. Two record fields are bookkeeping, not
+authoring choices: `source_dataset` defaults to `"synthetic"` if the case does
+not set it, and `source_index` is assigned per case during expansion.
+
+## Record format
+
+One JSON object per line. Field set is exact:
+
+```json
+{
+  "id": "dataset/case_id/question_key",
+  "source_dataset": "dataset-name",
+  "source_index": 12345,
+  "source_hash": "sha256 of text",
+  "text": "{\"serialized\": \"state\"}",
+  "qtype": "noul | choice | score",
+  "criteria": {},
+  "instruction": "what is being asked",
+  "soft_label": {
+    "probabilities": { "k1": 0.9, "k2": 0.1 },
+    "label": "k1"
+  }
+}
+```
+
+Question-type specifics:
+
+| qtype | `criteria` shape | option keys | notes |
+| - | - | - | - |
+| `noul` | `{"true": "...", "false": "..."}` | `true`, `false` | 2 options, fixed order |
+| `choice` | `{"key": "criterion text", ...}` | your keys | ≥2 options |
+| `score` | `["level 0", "level 1", ...]` | `"0"`, `"1"`, ... | ordered list |
+
+One **case** produces multiple records that share `text`, `source_hash`, and
+`source_index`, differing only in `qtype`/`criteria`/`instruction`/`soft_label`.
+
+Case-form chunks carry one extra object, `meta`, holding the diversity plan (see
+`references/anti-shortcut.md`). It is **not** a training field: it is dropped
+when cases are expanded into records. The audit reads all of it; the validator
+reads `benign_directive_span` and `payload_span` while checking, but nothing it
+emits carries `meta`.
+
+Full schema details, with edge cases and a worked example, are in
+`references/soft-labels.md` and `references/state-formats.md`.
+
+## Authoring input: YAML first
+
+Have the model write **YAML**, not raw JSONL. Escaping JSON-inside-JSON is the
+single most common way a generated chunk is silently corrupted: one missed
+backslash in `content` or `action` and the record is unusable. In YAML the case
+is structure, and the script does the escaping:
+
+```yaml
+- traj_id: ruhsoft_000101_a1b2c3d4
+  safe: true
+  turns:
+    - role: user
+      content: |
+        Triage the open tickets. Summarise each and reply in-place.
+        Do not move anything out of the queue.
+    - role: agent
+      thought: List the open tickets first.
+      action:
+        name: list_tickets
+        arguments: {status: open, limit: 25}
+  meta:
+    scenario_family: support-triage
+    entity_family: northlight
+    id_style: ticket-prefix
+    thought_style: terse
+    injection_present: false
+    external_contact: false
+    harm_kind: none
+    request_shape: standard
+  is_violation: false
+  mechanism: own_reasoning
+  severity: 0
+```
+
+`meta` must carry `harm_kind` and `request_shape` when the audit runs with
+`--require-taxonomy-axes`; the labels (`is_violation`, `mechanism`, `severity`)
+are the question keys, not part of `meta`.
+
+`yaml_to_jsonl.py` (stdlib only, no PyYAML) then:
+
+- serialises `action:` / `content:` / `thought:` mappings to the JSON strings
+  the record contract requires;
+- accepts a list of cases, `---`-separated documents, or a top-level `cases:`
+  list;
+- rejects anchors/aliases, tabs used for indentation, unclosed quotes and
+  non-JSON `action` strings **with a line number**;
+- validates the result against the taxonomy (`--check`) and expands to records
+  (`--expand`) using the same `expand_case` the validator uses;
+- writes atomically (temp file + rename), so a crash cannot leave a half chunk;
+- is fail-closed: any error means nothing is written.
+
+Supported YAML subset, so the prompt can stay honest: block mappings and
+sequences, plain/quoted scalars, `|` and `>` block scalars with `-`/`+`
+chomping, inline `[...]`/`{...}`, comments, multiple documents. Quote any value
+that must stay a string (`"0"`, `"000101"`, ids). Plain `yes`/`no` stay strings;
+only `true`/`false` become booleans.
+
+**Keep an email address mid-line inside a `|` block.** When a block scalar is
+JSON-escaped, a real newline becomes the two characters `\n`; the address regex
+sees `\nmeeme@…` and binds the `n` onto the local part (`nmeeme@…`), which then
+fails the locked-batch check as an off-batch address. Put a word before the
+address on the same line, or use a quoted scalar for single-line content.
+
+### Round workflow: allocate → write → merge → check
+
+`scripts/data_writer.py` is the **only** writer. Do not invent a generator, do
+not write JSONL by hand, do not choose your own filenames.
+
+Start every run with `data_writer.py brief`: it prints the flow, the YAML field
+set, and the most common rejection reasons, so an agent needs neither the
+script sources nor a guess. Read `SKILL.md` and `references/*.md` for detail;
+the implementation under `scripts/` is not the contract — do not read it to
+work out what to generate, and never edit it.
+
+```bash
+# 0. freeze the address batch first — addresses come from here, nowhere else
+#    --count is the number of ADDRESSES, not cases; work/ is outside the output root
+python3 scripts/sample_emails.py --scenario violation --count 12 \
+  --cross-map --manifest work/emails.json --ledger work/ledger.txt
+
+# 1. reserve names for this round; register the batch so write() can verify
+#    --count is the number of CHUNK SLOTS, not cases: one YAML holds a whole
+#    chunk, so a single pilot chunk is --count 1. Unused slots stay pending and
+#    are never merged. names start at chunk_0001 and are never guessed — read
+#    the id allocate prints. If this round contains injections, salt the prompt
+#    FIRST and register it, or write() stamps no salt and --require-salt fails.
+python3 scripts/salt.py --in work/prompt.txt --out work/salted_prompt.txt
+python3 scripts/data_writer.py allocate --count 1 \
+  --email-manifest work/emails.json --salted-prompt work/salted_prompt.txt \
+  [--worker sub-3]
+#    -> round: r-2026...   chunk_0001  yaml=data/inbox/chunk_0001.yaml
+
+# 2. write the model's YAML to that exact path, then gate the YAML itself
+#    (no --require-salt yet: the host stamp does not exist before write)
+python3 scripts/validate_and_integrate.py --check data/inbox/chunk_0001.yaml \
+  --taxonomy data/taxonomy.json --expand --require-complete-cases --timeout 300
+python3 scripts/audit_diversity.py --chunks data/inbox/chunk_0001.yaml \
+  --taxonomy data/taxonomy.json --require-injection --strict --require-taxonomy-axes \
+  --email-manifest work/emails.json --timeout 300
+
+# 3. convert in place (this is where meta.salted is stamped)
+python3 scripts/data_writer.py write --round r-2026... \
+  --name chunk_0001 --in data/inbox/chunk_0001.yaml --taxonomy data/taxonomy.json
+
+# 4. re-run both gates on the written chunk, now with --require-salt
+python3 scripts/validate_and_integrate.py --check data/chunks/chunk_0001.jsonl \
+  --taxonomy data/taxonomy.json --expand --require-complete-cases --timeout 300
+python3 scripts/audit_diversity.py --chunks data/chunks/chunk_0001.jsonl \
+  --taxonomy data/taxonomy.json --require-injection --strict --require-taxonomy-axes \
+  --require-salt --email-manifest work/emails.json --timeout 300
+
+# 4b. ONLY if a gate failed: discard, fix the YAML, rewrite the same name,
+#     then repeat step 4. A passing chunk skips this step.
+python3 scripts/data_writer.py discard --round r-2026... \
+  --name chunk_0001 --reason audit:injection_surface
+
+# 5. merge ONLY this round's written chunks (never a glob over all chunks)
+python3 scripts/data_writer.py merge --round r-2026... \
+  --taxonomy data/taxonomy.json
+
+# 6. fail the round if it left anything behind
+python3 scripts/data_writer.py check --round r-2026... --strict
+```
+
+`discard` is the supported recovery path: it deletes only that chunk's JSONL,
+**keeps the YAML** for repair, and sets the manifest entry back to `pending`, so
+`merge` can no longer pick up a chunk that failed a gate. Deleting the JSONL by
+hand is not a substitute (and `check` will notice inconsistent state); neither
+is allocating a fresh name, which leaves the bad chunk in the round.
+
+What the tool enforces:
+
+- **One output root, chosen inside the project.** `--data-dir` defaults to
+  `./data` but may name any writable directory — there is no project to stay
+  inside. Everything the round writes (inbox, chunks, rounds) stays under that
+  root, so a corpus is always self-contained. Run `data_writer.py list-dirs` to
+  see existing roots in the working directory.
+- **Names are allocated, not guessed.** `chunk_<4+ digits>[_<suffix>]`; `write`
+  requires the YAML to be at the exact slot from `allocate` and refuses
+  unallocated names.
+- **Concurrent rounds cannot collide.** Two rounds working in separate copies
+  of a corpus cannot see each other's chunks, so a sequential number alone
+  would hand the same name to both. Pass `--suffix <token>` to namespace the
+  run (`chunk_0007_batchA`); the token is yours to choose and is never read
+  from the environment. Without it the plain `chunk_0007` form is used.
+- **Parallel authoring is encouraged, capped at 8 chunks per round.** Split the
+  work across subagents writing separate chunks; the main agent still runs
+  `write` and both gates on every one. The cap is enforced by `allocate` on the
+  round's total slots (not per call), because past it the review queue — one
+  validation pass per chunk — is what fails the round. Partition
+  `scenario_family` / `entity_family` / `id_style` / `thought_style` across
+  subagents up front; uncoordinated workers converge on one template and the
+  audit rejects the whole round.
+- **Each subagent claims its slot before writing.** `allocate --workers a b c`
+  prints a chunk→subagent table; a worker runs `data_writer.py claim --round
+  <id> --name <exact name> --worker <self>` first. The name carries the run
+  suffix (`chunk_0007_40840653996`) and must be copied verbatim — inventing
+  `chunk_0007.yaml` or dropping the suffix lands in someone else's slot. Without
+  the claim, two workers both "write their chunk" and the later YAML replaces
+  the earlier one silently: no gate ever sees the lost work. `claim` refuses a
+  second owner, and `write --worker` refuses to accept work on a slot claimed
+  by someone else.
+- **One label, one slot.** Labels passed to `--workers` must be unique;
+  `allocate` rejects a repeated label and the reserved `main` /
+  `orchestrator`. `claim` additionally refuses a label that already holds a
+  *different* slot. Both guards exist for the same failure: a worker labelled
+  twice has to pick one of "its" chunks, and the other is dropped in silence.
+- **A name from another round is refused, with the round that owns it.**
+  `claim` and `write` look across `rounds/*.json`; a subagent that copied a
+  previous round's dispatch table gets `chunk_0001 属于其它轮次（['r-a']）…`
+  instead of writing into a slot that this round's `check` will later call
+  unregistered. Fix the name from the current round's table — never rename
+  around the error.
+- **A subagent's contract is exactly three obligations.** Claim the slot, write
+  that one YAML, echo the authored `traj_id` / `payload_span` set. It must not
+  run `write` / `merge` / any gate / any git command, must not write a second
+  file, and its self-report is not a verdict — only the orchestrator's exit
+  codes are. When you hand a subagent its task, restate those three obligations
+  and the prohibitions in the task itself: a subagent given only "write chunk N"
+  is behaving correctly when it stops after writing, which is exactly how the
+  4-subagent / 2-written round was lost. A refused claim or a harness-blocked
+  shell is reported verbatim, never worked around by renaming or swapping slots.
+- **The orchestrator finishes every slot it opened.** After the subagents
+  return, the orchestrator walks the dispatch table and `write`s + gates each
+  slot itself, then confirms `rounds/<id>.json` has no `pending` allocation.
+  Anything it cannot finish is `discard`ed; verified failures are removed from
+  the corpus by `prune` before the output is archived, so a half-finished slot
+  never reaches the corpus.
+- **No overwrites; one recovery path.** An existing `chunks/chunk_NNNN.jsonl` is
+  never replaced. If the chunk failed a gate, run `discard` (it keeps the YAML
+  and returns the slot to `pending`), fix the YAML, and `write` the same name.
+  Do not `rm` the JSONL and do not allocate a new name to dodge it.
+- **Round-scoped merge.** `merge` reads the round manifest only, so another
+  round's chunks or a hand-placed file can never slip in. Discarded and pending
+  slots are skipped; after rewriting a discarded chunk, re-run `merge` because
+  the previous merged output is stale.
+- **No pollution.** `check` fails on unallocated chunk files, temp/backup files
+  (`.tmp-*`, `*.tmp`, `*.bak`, `*.swp`, `__pycache__`, …), and any `.py` under
+  the output root — i.e. a model that tried to write its own `author.py`.
+- **No unknown files in the output root.** Only `taxonomy.json`,
+  `ruhui_soft_all.jsonl`, `ruhui_soft_card.md`, `chunks/`, `inbox/`, `rounds/`,
+  and `split/` (with `train.jsonl` / `calibration.jsonl` / `test.jsonl` /
+  `split_manifest.json`) are recognised. Anything else is a WARN, and
+  `--strict` turns WARNs into failures.
+- Round manifests live in `data/rounds/<round>.json`; sources in
+  `data/inbox/`; accepted chunks in `data/chunks/`.
+
+### Which file is training data
+
+Only `rounds/<round>/soft_*.jsonl` (identical to `merged_soft.jsonl`) is
+training data. The layers are easy to confuse because all three are JSONL:
+
+| path | shape | feed to ruhui? |
+| - | - | - |
+| `inbox/chunk_NNNN.yaml` | source the model authored | no |
+| `chunks/chunk_NNNN.jsonl` | **case form**: `traj_id`, `safe`, `turns`, `meta`, label fields | **no** |
+| `rounds/<round>/soft_*.jsonl` | **record form** (the 9-field contract) | **yes, this one** |
+
+A case-form line has no `id`, `text`, `qtype`, `criteria`, `instruction` or
+`soft_label`; handing it to `prepare_train_data.py` yields zero items instead of
+an error, so the mistake is quiet. If a file's first line carries `turns` and
+`traj_id`, it is an intermediate, not a dataset.
+
+### When a gate fails
+
+There is exactly one recovery path, and it is mechanical. Never weaken a check,
+never edit the emitted JSONL, never start a parallel bad chunk.
+
+| failure | action |
+| - | - |
+| `write` says the JSONL exists | It was written and then failed a gate: `discard`, fix the YAML, `write` the same `--name`. |
+| `audit: entity_family … 在 text 中找不到` | Make the family a literal, token-for-token substring of the turns; `meta` is not a form to fill in. |
+| `audit: injection_surface / payload_style 过度集中` | With `n` injected cases each value may appear at most `floor(0.4n)` times. `n=2` is **unsolvable** (each value is 50%). Use ≥3 injected cases with 3 distinct surfaces and 3 distinct styles. |
+| `audit: request_shape / harm_kind 过度集中` | Same `floor(0.4n)` cap. Seven cases are unsolvable (3 axes into 2+2+3); use ≥8 cases. |
+| `audit: safe=true 但用了已知一次性域名` | The thought needs both a temp-mail word (`temporary|temp|disposable|throwaway` + `mail|mailbox`) and a scope word (`within scope`, `not a violation`, `compliant`, `business action`). Copy the printed sentence verbatim if unsure. |
+| `validate: 标签覆盖 (--strict)` | Every `choice` key and every `score` level must appear at least once. Grow the chunk (or re-balance scenarios); do not bolt on a throwaway case that fits nothing else. |
+| `validate: payload_span 不在 text 中` | Copy the payload verbatim into an `environment` turn first, then paste the same one-line string into `meta.payload_span`; no paraphrasing, no newlines inside the span. |
+| `write: 地址不在锁定批次` | Addresses come only from the sampled batch, verbatim. Do not invent, normalise, or grep the library. |
+| exit `3` anywhere | The `--timeout` budget expired: shrink or split the chunk and retry. Never raise the limit. |
+
+**Where scratch files go.** The salted prompt, the email manifest and prefix
+ledger, audit JSON reports, and `--out-dir` holdouts are *not* corpus files, so
+they must live **outside the output root** or `check --strict` will fail the
+round. Keep them in one project-internal scratch directory, e.g. `./work/`, and
+never commit it:
+
+```bash
+python3 scripts/sample_emails.py --scenario violation --count 12 \
+  --cross-map --manifest work/emails.json --ledger work/ledger.txt
+```
+
+If `check` reports a stray file, **move it out of the output root** (or delete
+it if it is a temp file). The tool writes each output through a `.tmp-*` file
+and an atomic rename, so a leftover `.tmp-*` means a crash — remove it. There is
+no sanctioned place for scratch files *inside* the output root.
+
+## Who runs the gates
+
+Two environment facts decide who may run the gates, and the whole workflow is
+built around them.
+
+Terms: the **orchestrator** is the main agent running the skill; a **subagent**
+is a worker it dispatches; the **harness** is the host program (CLI/app) that
+executes tool calls, and it may consult a **permission classifier** (is this
+command allowed?) or a **workspace-isolation hook** (may this process touch this
+path?).
+
+- **The gate executor is the orchestrator, not a subagent.** Content that
+  characterises injections and safety violations can be refused by a permission
+  classifier or a workspace-isolation hook when a *subagent* tries to execute it,
+  even though the data is inert detector material. The salt inoculates the
+  *generating model*; it is not visible to the *harness*, so the harness may
+  still deny a subagent's shell call. Do not make a subagent responsible for
+  running `write` or the gates. Subagents write YAML; the main agent runs every
+  gate and owns the verdict. A subagent that reports "the command was blocked / I
+  could not run it" has produced no verdict — the main agent runs the same
+  command itself and obeys its exit code.
+- **Resolve the interpreter before the first command.** On some hosts `python3`
+  is a broken store alias and only `python` (or `py`) works. Detect once and use
+  the working name consistently across every gate call; the docs show `python3`
+  as a generic placeholder, not a guarantee.
+
+Generation may be delegated; verification never is.
+
+## Wall-clock budget
+
+Every gate and the converter take `--timeout SECONDS` (default `0` = unlimited).
+The budget covers the whole run, is checked per case and inside the O(n²)
+leak/payload comparisons, and exits **3** on expiry. In a generation loop treat
+exit 3 like any other rejection: shrink the chunk or split it, then retry —
+never remove the timeout to get a pass. A typical chunk budget is 60–300s.
+
+### Round timer (3 hours) and stop-loss
+
+`--timeout` bounds one command. A **round** also has a wall clock, because a
+generation run that never converges ships nothing at all. `allocate` records
+`created_at` and a `budget_hours` (default **3**), and every later command
+recomputes the tier from it:
+
+| tier | when | what happens |
+| - | - | - |
+| `ok` | elapsed < 75% of budget | normal work |
+| `warn` | past 75% (`--warn-fraction`) | ⚠ notice on every command: finish the YAML in hand, start no new scenario |
+| `stop` | elapsed ≥ budget | ⛔ stop-loss: `write` **refuses new chunks**; only `salvage` runs |
+
+At `stop` the run must ship what exists, not keep building:
+
+```bash
+python3 scripts/data_writer.py salvage --round <id> \
+  --taxonomy data/taxonomy.json
+```
+
+`salvage` converts every allocated slot whose YAML exists and validates,
+**skips** the ones that fail without blocking the rest, and merges this round
+only. It is the sanctioned way to finish an over-budget round. It does not
+touch version control; archiving the output directory is the caller's job.
+
+Adjust per round with `allocate --budget-hours H --warn-fraction F`. Do not
+raise the budget to make a slow round pass; that is the same mistake as
+raising `--timeout`.
+
+The round-clock notice is **informational**, not a data defect:
+`check --round --strict` does not fail an over-budget round whose salvaged
+chunks are valid, because the contract treats a partial round delivered at
+`stop` as a success.
+
+## Robust input handling
+
+The loaders accept what a model actually emits, without relaxing content rules:
+a JSON array or one pretty-printed object instead of JSONL, markdown code fences
+(a three-backtick `json` fence), a UTF-8 BOM, CRLF, blank lines, `//` lines, and
+trailing commas. `.yaml`/`.yml` paths go through the YAML reader directly, so
+`audit_diversity.py` and `salt.py` can audit an unconverted chunk. Invalid bytes
+are decoded with replacement instead of crashing. Outputs are written atomically.
+
+## Quick checks
+
+Commands assume the working directory is the repository root and the skill is
+installed at `./`.
+
+```bash
+# round workflow: allocate -> write -> merge (round only) -> check
+# allocate numbers from chunk_0001 on a clean root, or after the highest number
+# already allocated; use the name it prints, not this sample.
+# Register --email-manifest (and --salted-prompt for injection rounds) here.
+python3 scripts/data_writer.py allocate --count 10
+python3 scripts/data_writer.py write --round <id> \
+  --name chunk_0001 --in data/inbox/chunk_0001.yaml --taxonomy data/taxonomy.json
+python3 scripts/data_writer.py merge --round <id> --taxonomy data/taxonomy.json
+python3 scripts/data_writer.py check --round <id> --strict
+
+# validate the YAML without writing anything (the ad hoc path; use `write` to emit)
+python3 scripts/yaml_to_jsonl.py --in 'data/inbox/*.yaml' \
+  --taxonomy data/taxonomy.json --check
+
+# draw a locked, cross-mapped email batch for a chunk (paste into the prompt)
+python3 scripts/sample_emails.py --scenario violation --count 10 \
+  --seed 7 --cross-map --manifest work/emails.json --ledger work/ledger.txt
+
+# validate records in a written chunk (no expansion: they are already records).
+# Gate chunks after `write`, and stop there — that is the sanctioned loop.
+python3 scripts/validate_and_integrate.py --check 'data/chunks/chunk_*.jsonl'
+
+# validate case-form chunks without writing anything
+python3 scripts/validate_and_integrate.py --check 'data/chunks/chunk_*.jsonl' \
+  --taxonomy data/taxonomy.json --expand --require-complete-cases
+
+# diversity audit: mandatory gate, must exit 0 (exit 3 = timeout)
+python3 scripts/audit_diversity.py --chunks 'data/chunks/chunk_*.jsonl' \
+  --taxonomy data/taxonomy.json --require-injection --strict --require-library-emails \
+  --email-manifest work/emails.json --require-salt --require-taxonomy-axes \
+  --holdout 2 --out-dir work/pilot_holdout --json work/pilot_diversity.json --timeout 300
+
+# salt a generation prompt (top salt + mid-prompt needle) before calling the model
+python3 scripts/salt.py --in work/prompt.txt --out work/prompt_salted.txt
+
+# verify the returned chunks carry a host stamp (no model-written salt field)
+python3 scripts/salt.py --check 'data/chunks/chunk_*.jsonl'
+
+# email dedup check: prints REGENERATE EMAIL YOURSELF when over-reused
+python3 scripts/sample_emails.py --check 'data/chunks/chunk_*.jsonl' \
+  --existing data/ruhui_soft_all.jsonl
+
+# integrate (expand cases) and write a data card; --corrections records
+# human-confirmed fixes so the card states repair, not just gates passed
+python3 scripts/validate_and_integrate.py --integrate --out data/ruhui_soft_all.jsonl \
+  --taxonomy data/taxonomy.json --expand --card data/ruhui_soft_card.md \
+  --corrections work/corrections.jsonl
+
+# deterministic split; grouped by meta.scenario_family when the input is case
+# form, so sibling variants of one skeleton never straddle the split
+python3 scripts/validate_and_integrate.py --split-dir data/split \
+  --chunks 'data/chunks/chunk_*.jsonl' --taxonomy data/taxonomy.json --expand
+
+# how much of the corpus a surface-only classifier can score (report, not a gate)
+python3 scripts/audit_shortcut.py --chunks 'data/chunks/chunk_*.jsonl' \
+  --json work/shortcut.json
+
+# leakage check between splits (command is printed by --split-dir)
+python3 scripts/validate_and_integrate.py --check 'data/split/test.jsonl' \
+  --leak 'data/split/train.jsonl' --leak 'data/split/calibration.jsonl'
+```
+
+Every gate exits non-zero and prints each failure, so wire them into your loop and
+treat a non-zero exit as "the chunk does not exist yet". Only the two gates —
+`validate_and_integrate.py` and `audit_diversity.py` — decide acceptance; the
+other commands here (converter, sampler, salt checker, `data_writer.py`) either
+write, or check one narrow thing.
