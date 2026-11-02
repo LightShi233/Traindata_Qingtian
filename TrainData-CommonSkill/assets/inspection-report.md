@@ -87,7 +87,7 @@ case <id>: <payload>
 For each case, read the state and all its questions and answer:
 
 - [ ] the primary label is defensible from the state alone
-- [ ] every question has one polarity; no "avoided/cause" flip inside a head
+- [ ] every question has one polarity; conditional heads (`severity`, `grounding`) appear only on `is_violation=true` cases and never as a zero-filled field
 - [ ] `choice` option sets match the taxonomy exactly
 - [ ] the `text` reads like real traffic, not a template with swapped nouns
 - [ ] at least two tool calls / expected structure present

@@ -13,6 +13,12 @@ scripts — with every environment dependency removed:
 - **no project confinement** — `--data-dir` may be any writable directory; the
   skill does not require a `.git` ancestor and never relocates a path.
 
+It also ships the revised **v4 taxonomy**: `mechanism` is gone (it restated
+`meta.injection_present` about an unobservable internal state), and `severity` /
+`grounding` are conditional on `is_violation=true`, so clean cases carry two
+heads and violating cases carry four. See `references/label-provenance.md` §7
+for the reasoning and the migration rule.
+
 ## Requirements
 
 Python 3.9+ and its standard library. No network, no PyYAML, no third-party

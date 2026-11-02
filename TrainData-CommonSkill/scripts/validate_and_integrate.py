@@ -238,7 +238,8 @@ def check_record(o, where, args, state):
     state["hashes"].setdefault(o["source_hash"], ck)
 
     group = state["groups"].setdefault(
-        ck, {"hash": o["source_hash"], "index": o["source_index"], "qids": set()})
+        ck, {"hash": o["source_hash"], "index": o["source_index"], "qids": set(),
+             "labels": {}})
     if group["hash"] != o["source_hash"]:
         errs.append(f"{tag}: 同一 case 的 text/source_hash 不一致")
     if group["index"] != o["source_index"]:
@@ -246,6 +247,9 @@ def check_record(o, where, args, state):
     qid = qid_of(rec_id)
     if qid is not None:
         group["qids"].add(qid)
+        label = (o.get("soft_label") or {}).get("label")
+        if label is not None:
+            group["labels"][qid] = str(label)
 
     try:
         parsed = json.loads(text)
@@ -493,7 +497,16 @@ def check_case(case, where, args, state):
         state["grams"].append((tid, g))
 
     if args.taxonomy:
+        answers = case_answers(case, args.taxonomy)
         for qid, q in args.taxonomy.get("questions", {}).items():
+            applies = question_applies(q, answers)
+            if not applies:
+                # A conditional head must be absent, not zero-filled: writing
+                # severity=0 on a clean case is a silent second label.
+                if qid in case and case[qid] is not None:
+                    errs.append(f"{where}: {qid} 只在 "
+                                f"{q.get('applies_when')} 时适用，本 case 不应带这个标签")
+                continue
             if q["type"] in ("choice", "score") and qid not in case:
                 errs.append(f"{where}: choice/score 问题 {qid!r} 缺少标签")
                 continue
@@ -513,6 +526,38 @@ def check_case(case, where, args, state):
     # because a soft label that is soft for no recorded reason is noise.
     errs = check_primary(case, args, errs, where)
     return errs
+
+
+def case_answer(case, qid, question):
+    """The case's answer for one question, in the form a condition compares."""
+    if question.get("type") == "noul":
+        positive = bool(case.get("safe") is False or case.get(qid))
+        return "true" if positive else "false"
+    if qid in case and case[qid] is not None:
+        return str(case[qid])
+    return None
+
+
+def question_applies(question, answers):
+    """Whether a conditional head is asked of this case.
+
+    ``applies_when`` makes a head hierarchical: ``severity`` and ``grounding``
+    are only asked when ``is_violation`` is true. The condition is evaluated
+    against the case's answers, never against ``meta``.
+    """
+    condition = question.get("applies_when")
+    if not condition:
+        return True
+    for key, want in condition.items():
+        got = answers.get(key)
+        if got is None or str(got).lower() != str(want).lower():
+            return False
+    return True
+
+
+def case_answers(case, taxonomy):
+    return {qid: case_answer(case, qid, q)
+            for qid, q in taxonomy.get("questions", {}).items()}
 
 
 def case_primary(case, qid=None):
@@ -543,6 +588,14 @@ def check_primary(case, args, errs, where):
         if unknown:
             errs.append(f"{where}: primary 里有未知的 head {sorted(unknown)}；"
                         f"只允许 default 和 taxonomy 的问题 id")
+        if args.taxonomy:
+            answers = case_answers(case, args.taxonomy)
+            questions = args.taxonomy.get("questions", {})
+            for key in raw:
+                question = questions.get(key)
+                if question and not question_applies(question, answers):
+                    errs.append(f"{where}: primary 给 {key} 设了值，但 {key} 在 "
+                                f"{question.get('applies_when')} 时根本不适用")
         for key, value in raw.items():
             if not isinstance(value, (int, float)) or isinstance(value, bool) \
                     or not (0.5 < value <= 0.9):
@@ -583,8 +636,11 @@ def expand_case(case, index, taxonomy):
     # genuinely contested (a recorded adjudication, see references/soft-labels.md);
     # the remainder is still spread evenly, so the label keeps the majority.
     # A mapping form lowers only the heads the adjudication actually disputed.
+    answers = case_answers(case, taxonomy)
     rows = []
     for qid, q in taxonomy["questions"].items():
+        if not question_applies(q, answers):
+            continue
         qt = q["type"]
         crit = q["criteria"]
         primary = case_primary(case, qid)
@@ -657,11 +713,13 @@ def completeness_errors(state, taxonomy):
     """Every case should carry exactly the taxonomy's question ids."""
     if not taxonomy:
         return []
-    want = set(taxonomy.get("questions", {}))
+    questions = taxonomy.get("questions", {})
     errs = []
     for ck, g in state["groups"].items():
         if not g["qids"]:
             continue
+        want = {qid for qid, q in questions.items()
+                if question_applies(q, g.get("labels", {}))}
         if g["qids"] != want:
             missing = sorted(want - g["qids"])
             extra = sorted(g["qids"] - want)
@@ -702,11 +760,6 @@ def case_shape(records):
     return tuple(sorted(shape))
 
 
-def _shape_summary(shape):
-    return ", ".join(f"{qid}[{len(keys)}]:i{ins}:c{crit}"
-                     for qid, keys, ins, crit in shape)
-
-
 def _records_by_case(rows):
     by_case = defaultdict(list)
     for r in rows:
@@ -714,31 +767,65 @@ def _records_by_case(rows):
     return by_case
 
 
-def head_set_errors(rows):
-    """Reject a corpus whose cases do not all carry the same head shape.
+def _shape_summary(shape):
+    return ", ".join(f"{qid}[{len(keys)}]:i{ins}:c{crit}"
+                     for qid, keys, ins, crit in shape)
 
-    Shape is the question ids, each question's option keys, and fingerprints of
-    its instruction and criteria. Case-form input already fails validation when
-    a head is missing, but the record-form path (``--integrate`` without
-    ``--expand``) is schema-agnostic, and a head-name-only check would miss both
-    a same-name/different-arity version and a reworded question. One corpus,
-    one shape.
 
-    Limitation (documented, not checked): a change that touches nothing inside
-    the record — e.g. how the trainer interprets a head — is invisible here.
-    Group integrations by ``taxonomy_version``; this check is the fallback.
+def _canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def contract_errors(rows, taxonomy):
+    """Check every record against the taxonomy it claims to implement.
+
+    Version mixing cannot be detected from the corpus alone once conditional
+    heads exist: a clean case legitimately has fewer heads than a violating
+    one, so "all cases have the same head set" is no longer an invariant. What
+    is invariant is the *contract*: each record's option keys, instruction and
+    criteria must be exactly the taxonomy's, and each case must carry exactly
+    the heads that apply to it.
+
+    Without ``--taxonomy`` this cannot be checked; the caller says so instead of
+    pretending a shape-homogeneity test still works.
     """
-    by_case = _records_by_case(rows)
-    shapes = Counter(case_shape(recs) for recs in by_case.values())
-    shapes.pop((), None)
-    if len(shapes) <= 1:
+    if not taxonomy:
         return []
-    shown = " | ".join(f"[{_shape_summary(s)}] ×{n}" for s, n in shapes.most_common(4))
-    return [f"同一语料里出现 {len(shapes)} 种 head/选项域/措辞组合：{shown}。"
-            "这要么是不同 taxonomy 版本混在一起，要么是同一 head 改了选项数或措辞"
-            "（i=instruction 指纹, c=criteria 指纹）；都会让训练信号错配。"
-            "按 round 的 taxonomy_version 分开整合"]
-
+    questions = taxonomy.get("questions", {})
+    errs = []
+    for ck, recs in _records_by_case(rows).items():
+        labels = {}
+        for r in recs:
+            qid = qid_of(r["id"])
+            label = (r.get("soft_label") or {}).get("label")
+            if qid is not None and label is not None:
+                labels[qid] = str(label)
+        for r in recs:
+            qid = qid_of(r["id"])
+            q = questions.get(qid)
+            if q is None:
+                errs.append(f"{ck}: head {qid!r} 不在 taxonomy（{sorted(questions)}）；"
+                            "这是另一个版本的数据")
+                continue
+            crit = q.get("criteria")
+            want_keys = (sorted(crit) if isinstance(crit, dict)
+                         else [str(i) for i in range(len(crit or []))])
+            probs = (r.get("soft_label") or {}).get("probabilities") or {}
+            got_keys = sorted(str(k) for k in probs)
+            if got_keys != want_keys:
+                errs.append(f"{ck}/{qid}: 选项集与 taxonomy 不一致；按版本分开整合")
+            if r.get("instruction") != q.get("instructions"):
+                errs.append(f"{ck}/{qid}: instruction 与 taxonomy 不一致；按版本分开整合")
+            if _canonical(r.get("criteria")) != _canonical(crit):
+                errs.append(f"{ck}/{qid}: criteria 与 taxonomy 不一致；按版本分开整合")
+        expected = {qid for qid, q in questions.items()
+                    if question_applies(q, labels)}
+        if set(labels) != expected:
+            missing = sorted(expected - set(labels))
+            extra = sorted(set(labels) - expected)
+            errs.append(f"{ck}: head 集合与 taxonomy 不符（缺 {missing}，多 {extra}）；"
+                        "条件 head 只在 is_violation=true 时出现")
+    return errs
 
 def collect(paths, args, expand=False):
     state = new_state()
@@ -869,14 +956,15 @@ def render_card(s, rows, source_desc, taxonomy_version, checks, corrections=None
     shapes = Counter(case_shape(recs) for recs in _records_by_case(rows).values())
     shapes.pop((), None)
     lines += ["", "## Head shape", ""]
-    if len(shapes) == 1:
-        lines.append(f"- every case carries: `{_shape_summary(next(iter(shapes)))}`")
-        lines.append("- A corpus built from an older taxonomy shows fewer heads here. "
-                     "That is a version boundary, not missing data; it also means one case "
-                     "contributes fewer training rows than the current taxonomy implies.")
-    else:
-        lines.append(f"- **{len(shapes)} different head shapes** — this should have been "
-                     "rejected by `head_set_errors`; do not train on it.")
+    for shape, count in shapes.most_common():
+        lines.append(f"- {count} cases: `{_shape_summary(shape)}`")
+    if len(shapes) > 1:
+        lines.append("- Multiple shapes are expected when the taxonomy has conditional "
+                     "heads: clean cases legitimately omit `severity` and `grounding`. "
+                     "Each shape must match the heads that apply to its own cases.")
+    elif shapes:
+        lines.append("- One shape across the corpus; confirm that matches the taxonomy's "
+                     "conditional rules rather than a version that emits every head.")
     lines += ["", "## Label correction status", ""]
     if corrections is None:
         lines.append("- no correction ledger supplied. This card therefore describes "
@@ -1120,12 +1208,16 @@ def main():
         # Case-form input already rejects a half-labelled case, but record-form
         # input is schema-agnostic: mixed versions would merge into one product
         # and the version information is gone by the time `merge` would look.
-        shape_errors = head_set_errors(rows)
-        if shape_errors:
-            for err in shape_errors:
-                print(f" - {err}")
-            print("整合/切分失败：这不是可以自动修复的问题，按版本分组后重跑")
-            sys.exit(1)
+        if not args.taxonomy:
+            print("[note] 未提供 --taxonomy：无法核对 head 契约与条件 head，"
+                  "跳过版本一致性检查；构建正式语料时应始终传入", file=sys.stderr)
+        else:
+            contract = contract_errors(rows, args.taxonomy)
+            if contract:
+                for err in contract[:40]:
+                    print(f" - {err}")
+                print("整合/切分失败：按 round 的 taxonomy_version 分开整合后重跑")
+                sys.exit(1)
 
     checks = [
         f"schema and soft-label validation: passed ({len(errors)} errors)",

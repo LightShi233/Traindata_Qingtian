@@ -909,6 +909,25 @@ def check_action_surface(parsed, audit, args):
                 f"{med['unsafe']:.0f} 字符（{ratio:.2f}×）；再拉大就会被当成捷径")
 
 
+def _answer_of(case, qid, question):
+    """Mirror of the validator's case_answer, kept local so this gate stands alone."""
+    if question.get("type") == "noul":
+        return "true" if (case.get("safe") is False or case.get(qid)) else "false"
+    value = case.get(qid)
+    return None if value is None else str(value)
+
+
+def _applies(question, answers):
+    condition = question.get("applies_when")
+    if not condition:
+        return True
+    for key, want in condition.items():
+        got = answers.get(key)
+        if got is None or str(got).lower() != str(want).lower():
+            return False
+    return True
+
+
 def check_primary_spread(parsed, audit, taxonomy):
     """Watch both degenerate ends of the confidence scale.
 
@@ -926,17 +945,20 @@ def check_primary_spread(parsed, audit, taxonomy):
     """
     if not taxonomy:
         return
-    qids = list(taxonomy.get("questions", {}))
+    questions = taxonomy.get("questions", {})
+    qids = list(questions)
     values = []
     for _, case, _meta in parsed:
+        answers = {qid: _answer_of(case, qid, questions[qid]) for qid in qids}
+        applicable = [qid for qid in qids if _applies(questions[qid], answers)]
         raw = case.get("primary", 0.9)
         if isinstance(raw, dict):
-            for qid in qids:
+            for qid in applicable:
                 value = raw.get(qid, raw.get("default", 0.9))
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     values.append(float(value))
         elif isinstance(raw, (int, float)) and not isinstance(raw, bool):
-            values.extend([float(raw)] * len(qids))
+            values.extend([float(raw)] * len(applicable))
     if not values:
         return
 

@@ -6,7 +6,7 @@ compatibility: Requires Python 3.9+ (standard library only; the YAML reader is b
 allowed-tools: Read Write Edit Glob Grep Bash(python3:*) Bash(python:*)
 metadata:
   author: ruhui-data
-  version: "1.0-common"
+  version: "1.1-common"
 ---
 
 # Generating soft-label training data
@@ -26,8 +26,13 @@ are rejected unless the corpus is explicitly justified.
 - **case** — one independent scenario: a `state` plus all its questions. It
   expands into several **records** (one per question) that share `text`,
   `source_hash`, and `source_index`; that sharing is by contract, not duplication.
-- **head** — one taxonomy question (`is_violation`, `mechanism`, `severity`);
-  a case has 2–4 heads. The heads of a case are not independent cases.
+- **head** — one taxonomy question (`is_violation`, `harm_kind`, `severity`,
+  `grounding`); a case has 2 or 4 heads depending on `is_violation`. The heads of
+  a case are not independent cases.
+- **conditional head** — a question asked only when another answer holds.
+  In the shipped v4 taxonomy, `severity` and `grounding` are asked only when
+  `is_violation` is `true`; a clean case must not carry them (a zero-filled
+  severity is a second, silent label).
 - **qtype** — a question's answer type: `noul` (true/false), `choice` (one of k
   keys), `score` (one ordered level).
 - **soft label** — a distribution over a question's options, primary `0.9`,
@@ -90,9 +95,11 @@ Confirm or decide, and write them down before generating:
    list).
 2. **Question taxonomy**: which `choice` option sets and `score` level sets are
    reused across cases. Reuse them; do not invent a new option set per record.
-   One head has one polarity — `mechanism` asks what drove the action in every
-   case, never "the mechanism it avoided" (a clean unsteered case is
-   `own_reasoning`). Tag each case on the two orthogonal `meta` axes from
+   One head has one polarity. A head that only makes sense for some cases is
+   **conditional** (`applies_when` in the taxonomy), not polarity-flipped: the
+   shipped v4 asks `severity` / `grounding` only when `is_violation` is true,
+   instead of asking every case and letting clean cases answer a constant.
+   Tag each case on the two orthogonal `meta` axes from
    `references/taxonomy-design.md` — `harm_kind` (semantic kind *present in the
    input*) and `request_shape` (`standard` / `contextual` / `near_miss`) — and
    rotate both; breadth on both is what keeps a single easy template from
@@ -391,11 +398,15 @@ taxonomy, then scale out. Never relax the audit to pass a chunk.
 
 1. Integrate accepted chunks into one file, re-running cross-chunk duplicate and
    leakage checks, then split into **training**, **calibration**, and **test**
-   sets. Integrate **one taxonomy version at a time**: a v2 chunk carries 3
-   heads, so mixing it into a v3 corpus silently down-weights its cases and
-   falls outside the v3 temperature buckets. `merge` refuses a mixed round, and
-   `integrate`/`split` now hard-fail on more than one head set (case-form input
-   fails validation earlier; record-form input gets an explicit check). Select
+   sets. Integrate **one taxonomy version at a time**: an older-version case
+   carries a different head set and different option keys, so mixing it in
+   silently down-weights its cases and falls outside the current temperature
+   buckets. `merge` refuses a mixed round; `integrate`/`split` verify every
+   record against `--taxonomy` (option keys, instruction, criteria, and the
+   heads that apply to each case) and exit 1 on a mismatch. Two head shapes are
+   legal in v4 — clean cases have 2 heads, violating cases 4 — so do not treat a
+   mixed shape count as an error by itself. Without `--taxonomy` the contract
+   check cannot run and says so, which is one more reason to pass it. Select
    chunks by the round's `taxonomy_version`; `data_writer.py check` prints the
    mismatches as INFO, and already-merged training files must be audited by
    hand (`--require-complete-cases` over `data/rounds/*/soft_*.jsonl`).
@@ -514,17 +525,16 @@ read it before your first `write`. The hard rules below still apply.
    so the address never predicts the label. `sample_emails.py --cross-map` does
    this; the audit fails a corpus where the disposable-email-domain share differs
    by more than 30 points between classes.
-11. **One head, one polarity.** Every case answers the same question the same
-    way; no head may ask "the failure" on violations and "the avoided failure" on
-    clean cases. The shipped taxonomy (`data/taxonomy.json`, v2) fixes the
-    polarity: `is_violation` asks whether a violation occurred; `mechanism` asks
-    what drove the agent's decisive action in *every* case (`injection`,
-    `misdirection`, `faulty_input`, `own_reasoning` — a clean case with no
-    external steering is `own_reasoning` — or `other`; there is no `none` key);
-    `severity` rates the impact that actually occurred, so a clean case is level
-    0 (`none`). A different question may legitimately need an absence option;
-    define it in the taxonomy once and reuse it there — never reuse one head for
-    both directions.
+11. **One head, one polarity; no constant branches.** Every question that is
+    asked of a case asks the same thing in the same direction; no head may mean
+    "the failure" for violations and "the avoided failure" for clean cases.
+    The shipped v4 (`assets/taxonomy-template.json`) fixes this structurally:
+    `is_violation` (noul) and `harm_kind` (choice) are asked of every case;
+    `severity` and `grounding` are **conditional** on `is_violation=true` and
+    are not emitted for clean cases at all. A different question may
+    legitimately need an absence option; define it in the taxonomy once and
+    reuse it there — never reuse one head for both directions, and never ask a
+    question whose answer is constant for half the corpus.
 12. **Diversify the generator, not just the nouns.** Rotate scenario skeletons,
     entity/org families, ID formats, thought voices, and generator personas
     across chunks. One voice across the whole corpus is a shortcut.
@@ -613,7 +623,7 @@ generation prompt) → `references/authoring-and-rounds.md` (before your first
 - `references/glossary.md` — every term in one place: case, head, qtype,
   polarity, scenario, payload, injection surface, hard negative, task domain vs
   email domain, round, holdout, cross-map, salt, orchestrator/subagent, and the
-  shipped v2 taxonomy in words. Start here when a sentence does not parse.
+  shipped v4 taxonomy in words. Start here when a sentence does not parse.
 - `references/anti-shortcut.md` — the diversity contract, `meta` schema, shortcut
   fingerprints, entity cross-mapping, hard negatives, polarity fix, pilot mixing.
 - `references/label-provenance.md` — why the labels are prior rather than

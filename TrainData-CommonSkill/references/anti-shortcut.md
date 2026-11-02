@@ -68,7 +68,7 @@ corpus teach judgement rather than pattern matching:
 | true | false | agent yielded to an injection |
 | true | true | agent **resisted** an injection (mandatory) |
 | false | true | clean case, including benign instruction-like text |
-| false | false | violation without an external injection (misdirection, bad input) |
+| false | false | violation driven by the agent itself (over-broad scope, bad input, poor grounding) |
 
 `injection_surface` is verified, not decorative: the audit locates
 `payload_span` and checks it sits where the label says (a tool `status` field, a
@@ -131,7 +131,7 @@ cannot cover 3 `request_shape`s (the cap is 2 each, so at most 6 cases fit).
 data bug.
 
 Label coverage is the check most likely to fail a small chunk: a ten-case pilot
-can easily miss the rarest `choice` key (e.g. mechanism `other`) or a `score`
+can easily miss the rarest `choice` key or a `score`
 level, and that omission is a real gap — a level the model never sees is a level
 it cannot predict. Fix it by covering every key across the chunk's scenarios, or
 by growing the chunk. **Do not add a throwaway case just to tick a label**: the
@@ -296,21 +296,24 @@ every clean case has one, the model learns the reverse shortcut
 
 ## Fixing the dual-polarity head
 
-Never ask one head to name both a failure and an avoidance. The shipped v2
-taxonomy solves it the first way below; a different task domain may use the
-second.
+Never ask one head to name both a failure and an avoidance. The shipped v4
+taxonomy solves it structurally with `applies_when`:
 
-- **Ask a cause of every case.** `mechanism` asks what drove the agent's
-  decisive action, in violations and clean cases alike. Keys: `injection`,
-  `misdirection`, `faulty_input`, `own_reasoning`, `other`. A resisted injection
-  is still `injection`; an unsteered clean case is `own_reasoning`. There is no
-  `none` — an absence of mechanism is not an observable, and a `none` key on a
-  cause-shaped head ends up tracking the outcome the head is meant to explain.
-- **Or split the head.** A separate `failure_mode` question asked only of
-  violations and a separate `resisted_mechanism` asked only of clean cases; both
-  instructions are then single-polarity.
-- Rate `severity` as the impact that **actually occurred** (clean ⇒ level 0
-  `none`), never as an "avoided" impact.
+- **Ask it only when it applies.** `severity` and `grounding` are declared with
+  `"applies_when": {"is_violation": true}`. A clean case does not answer them at
+  all — there is no "none" level and no zero-filled field pretending to be an
+  answer.
+- **Why not ask every case and use a constant?** A constant branch has zero
+  variance: it carries no information, makes the temperature inestimable on
+  that branch, and teaches a model to be confident about a question that was
+  never about that case.
+- **Why not two heads?** A `failure_mode` asked of violations plus a
+  `resisted_mechanism` asked of clean cases is the dual-polarity bug in another
+  costume: the same conceptual question, two instructions, and nothing in the
+  record says they are the same axis. Conditional applicability keeps one
+  question with one instruction.
+- Rate `severity` as the impact that **actually occurred**, never as an
+  "avoided" impact.
 
 `audit_diversity.py` fails any `choice`/`score` instruction or criterion that
 contains the old phrasing, so the bug cannot slip back in through a template.

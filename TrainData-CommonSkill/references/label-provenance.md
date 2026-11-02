@@ -20,6 +20,10 @@ Everything in a case is authored at generation time, including its labels.
 | `harm_kind` / `severity` / `grounding` | the plan's intent |
 | every probability | the constant `0.9` |
 
+The table describes the v3 corpus this audit was run on. v4 (this copy) removes
+`mechanism`; the other rows are still true, which is why the gates measure rather
+than assume (§2–§3).
+
 So the "teacher" is not a grader looking at the produced trajectory; it is the
 specification that asked for the trajectory. Nothing in the pipeline ever
 re-reads the turns to ask *did this actually happen?* A case planned as a
@@ -320,86 +324,37 @@ items belong on that card separately, because they are different failures:
 Until a corpus has been human-reviewed end to end, its label error is observed,
 not bounded.
 
-## 7. One open taxonomy decision, deliberately not taken here
+## 7. The taxonomy decision, applied in this copy (`v4`)
 
-`mechanism` is the head most exposed by this audit. Its five keys describe the
+`mechanism` was the head most exposed by this audit. Its five keys describe the
 agent's *cognitive source* — an internal state nothing in the trajectory
-observes — and the generator derives them from `meta.injection_present`, so the
-label is a restatement of the plan (the audited corpus showed 289/289
-correspondence). The audit that recommended removing it also recommended making
-`severity` / `grounding` conditional heads.
+observes — and the generator derived them from `meta.injection_present`, so the
+label restated the plan (the audited corpus showed 289/289 correspondence).
 
-Changing a head is a **consumer-contract change**: every existing case carries
-an answer for it, `data/taxonomy.json` is the stable cross-chunk contract, and
-`merge` refuses to mix versions. Cutting `mechanism` therefore needs a version
-bump (`v4`), a migration note for the already-merged rounds, and a decision
-about the qtype tilt (removing it moves `choice` from ~40% to ~25%). That is a
-deliberate, separately reviewable change — not something a data-generation pass
-should do silently. Until then the head stays, and every chunk that carries it
-also records `meta.injection_present`, which is what makes the redundancy
-visible instead of invisible.
+This copy ships the recommended change instead of deferring it:
 
-**The contract change and stopping the harm are decoupled.** Nothing here needs
-to wait for a v4 to stop the noise: the consumer can down-weight that head's
-loss to 0, or filter its records at load time, without touching the schema or
-the data. `prepare_train_data.py` writes one item per question and carries
-`qtype`/`instruction` on each, so both are a loader-level filter — the corpus
-stays valid either way. Confirm which one the training loop does, because they
-are not equivalent in step count: filtering records shortens the epoch, while a
-zero weight keeps the step count and wastes the batch slot.
+- **`mechanism` is gone.** It was a label about an unobservable, redundant with
+  a field the generator already wrote.
+- **`severity` and `grounding` are conditional** on `is_violation=true`. They
+  are not asked of clean cases at all, so no clean branch is fitted and no
+  constant level is trained.
+- **The qtype mix changes.** A clean case expands to 2 records (`noul` +
+  `choice`), a violating case to 4 (adding two `score`); on a balanced corpus
+  that is 1/3 noul, 1/3 choice, 1/3 score. A downstream loss that normalises per
+  qtype will see this; check the objective before assuming the old 20/40/40
+  split.
+- **The contract version is `ruhui-triage-v4`.** Records authored under v3 (or
+  v2) are a different contract: do not mix them into a v4 corpus. `merge`
+  refuses a mixed round. `integrate`/`split` verify each record against the
+  taxonomy (`contract_errors`): same option keys, instruction and criteria, and
+  each case carrying exactly the heads that apply to it. Two head shapes are
+  legal here (clean 2, violating 4) — that is the conditional design, not a
+  version mix. Without `--taxonomy` the check cannot run and says so.
 
-**A missing head is a version boundary, not missing data.** Early chunks in the
-private corpus (`chunk_0001`, `chunk_0002`, `chunk_0004`) carry only 3 of the 5
-heads. Their round manifests say `taxonomy_version: ruhui-triage-v2` — the v2
-taxonomy had three questions, so those rows are complete for the contract they
-were authored against. They are not a generator defect, not random missing
-values, and not something to repair: validating them against v3 must fail, and
-`--require-complete-cases` failing there is correct. The consequences follow:
-
-- **Do not mix versions in one training corpus.** Under per-item averaging a
-  v2 case contributes 3 items instead of 5, so it is silently down-weighted to
-  60%; its rows also fall outside the v3 `(choice,7)` / `(score,4)` buckets.
-  `merge` already refuses a mixed round. `integrate`/`split` now **hard-fail**
-  when the input carries more than one **head shape**, where shape is the head
-  ids, each head's option keys (`severity{0,1,2,3}`), **and fingerprints of the
-  instruction and criteria text**. Head names alone miss a v4 that keeps the
-  same five names but changes an option count; keys alone miss a v4 that only
-  rewords the question. All of it is carried verbatim in every record, so the
-  check needs no manifest and no knowledge of the data root. Case-form input
-  fails earlier (a missing head is a validation error even without
-  `--require-complete-cases`); the record-form path — which is schema-agnostic —
-  gets the explicit `head_set_errors` check before anything is written. The
-  `INFO` below is a diagnostic, not the safeguard.
-- **What is still invisible: a change outside the record.** If a version change
-  touches neither the head ids, the option keys, the instruction, nor the
-  criteria — e.g. how the trainer interprets a head — the shape is identical and
-  the check passes. That is not a data mix, but it is also not something a
-  corpus gate can see. Keep grouping integrations by `taxonomy_version`
-  (`data_writer.py check` names the mismatched chunks); the shape check is the
-  fallback, not the policy. The one assumption to state: it treats "one head =
-  one instruction template". A taxonomy that intentionally paraphrases a
-  question per case would trip it, and the current taxonomy does not (verified:
-  one instruction hash per head across the corpus).
-- **`data_writer.py check` prints the mismatches** (`INFO [taxonomy-version]`,
-  non-failing) so a build run can see which chunks belong to another version
-  without opening the manifests.
-- **Already-merged training files need the same check by hand.** The gate above
-  protects new builds, not history: a `soft_*.jsonl` produced before this check
-  may already contain 3-head cases, and if it was trained on, those rows are
-  part of the model's history and cannot be "un-mixed". Audit them with
-  `validate_and_integrate.py --check 'data/rounds/*/soft_*.jsonl'
-  --taxonomy data/taxonomy.json --require-complete-cases`; record the result in
-  the data card instead of assuming a clean corpus.
-- **A per-round pipeline needs no exemption for history.** A wrapper that gates
-  only newly added chunks (`git diff --base..HEAD -- 'chunks/chunk_*.jsonl'`,
-  for example) never re-validates already-archived v2 chunks against v3. The
-  failure only appears if someone points the v3 validator at a whole-root glob
-  by hand.
-- **Rejection is whole-case, not per-head.** The validator errors the case and
-  `expand_case` raises on a missing question — it never emits the 3 good heads
-  and drops 2. That is deliberate: a half-labelled case is ambiguous (was the
-  head absent, or was it skipped?), and silently keeping the remaining items is
-  how a version mismatch becomes invisible.
+**Stopping the harm did not have to wait for the version bump.** A consumer can
+down-weight a head's loss to 0 or filter its records at load time without
+touching the schema; the two are equivalent only if the training loop averages
+per item (see §8).
 
 ## 8. What the downstream actually consumes (verified against ruhui)
 
@@ -438,22 +393,16 @@ reference `prepare_train_data.py`, not assumed:
   deployment prior, reweight the calibration split before fitting or apply a
   logit offset of `log(prior_new / prior_here)`, and report ECE at both priors.
   The data card now states this next to the label distribution.
-- **Calibration buckets are per `(qtype, option-count)`.** The heads split as
-  `mechanism (choice, 5)`, `harm_kind (choice, 7)`, `severity (score, 4)`,
-  `grounding (score, 4)`. So dropping `mechanism` does **not** change
-  `harm_kind`'s fitted population — different `k`, different bucket, they never
-  shared one. The truly shared bucket is `severity` + `grounding`; refit it
-  after any change to either.
-- **A conditional head needs a conditional bucket, and one branch must not be
-  fitted at all.** If `severity` is conditioned on `is_violation` (§7), the
-  clean branch is `severity ≡ 0` by this taxonomy's own definition ("none: no
-  impact") — variance zero, so a temperature fitted there has a zero
-  denominator. Split the buckets as `(score, true, 3)`: the violation branch
-  never takes level 0, so it is a 3-way fit — and `(score, false, 1)`: a
-  constant, published as `1.0` without fitting. Do not merge the two into one
-  `(score, 4)` bucket; that fits a degenerate half and inflates the estimate's
-  variance. The same applies to `grounding`, whose clean branch is almost
-  constant.
+- **Calibration buckets are per `(qtype, option-count)`.** In v4 the heads are
+  `harm_kind (choice, 7)`, `severity (score, 3)` and `grounding (score, 4)`,
+  all on violating cases only for the two scores. `severity` and `grounding`
+  are separate buckets (different `k`); refit after any change to either.
+- **A conditional head removes the degenerate bucket instead of fitting it.**
+  v3 asked `severity` of every case, so the clean half was constant 0 —
+  variance zero, temperature inestimable. v4 does not emit the question on
+  clean cases, so there is no clean bucket to fit at all. If a taxonomy must
+  keep a constant branch, publish it as a constant (`1.0`) and never fit a
+  temperature there; do not merge it with the informative branch.
 - **Missing labels are not a special case.** A score head stored as `null`
   (which an external audit reported 13 times) is not a valid level: the current
   validator rejects it (`不是有效等级`), and `expand_case` would refuse to emit

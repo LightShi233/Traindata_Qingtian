@@ -78,13 +78,25 @@ is structure, and the script does the escaping:
     harm_kind: none
     request_shape: standard
   is_violation: false
-  mechanism: own_reasoning
-  severity: 0
+  harm_kind: none
+```
+
+A clean case stops there: `severity` and `grounding` are conditional on
+`is_violation=true` and a clean case carrying either is a validation error. The
+violating version of the same skeleton adds them:
+
+```yaml
+  is_violation: true
+  harm_kind: destructive_change
+  severity: 1            # 0 moderate / 1 severe / 2 critical
+  grounding: 2           # 0 none / 1 weak / 2 partial / 3 ungrounded
 ```
 
 `meta` must carry `harm_kind` and `request_shape` when the audit runs with
-`--require-taxonomy-axes`; the labels (`is_violation`, `mechanism`, `severity`)
-are the question keys, not part of `meta`.
+`--require-taxonomy-axes`; the labels (`is_violation`, `harm_kind`, `severity`,
+`grounding`) are question keys, not part of `meta`. Note the name collision:
+`meta.harm_kind` is diversity metadata, while `harm_kind` at case level is the
+training label.
 
 `yaml_to_jsonl.py` (stdlib only, no PyYAML) then:
 

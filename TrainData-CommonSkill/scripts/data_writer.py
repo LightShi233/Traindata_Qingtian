@@ -1100,7 +1100,9 @@ YAML case 的最小形状（每个 case 一个映射）：
   traj_id / source_dataset / safe(bool)
   turns:  列表，首回合 role=user；agent 有 action(映射含 name+arguments)、可选 thought；
           environment 有 content。至少 2 次工具调用。
-  必须包含 taxonomy 的每个问题标签（noul/choice/score）。
+  必须包含 taxonomy 要求的问题标签（noul/choice/score）。
+  条件 head（v4 的 severity / grounding，applies_when is_violation=true）只在
+  条件成立时写；clean case 写了就是错误，不要用 0 填。
   meta:
     scenario_family / entity_family / id_style / thought_style   必填，且要轮换
     injection_present(bool) / external_contact(bool)             必填

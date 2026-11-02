@@ -39,10 +39,11 @@ into a real record.
 Prefer emitting spread values rounded to 6-8 decimals and then renormalizing the
 last key so the sum is exactly 1.0 in float64.
 
-`score` with 4 levels (the shipped `severity` shape), primary level 1:
+`score` with 3 levels (the shipped `severity` shape after v4 made it
+conditional), primary level 1:
 
 ```json
-{"probabilities": {"0": 0.0333333333, "1": 0.9, "2": 0.0333333333, "3": 0.0333333333}, "label": "1"}
+{"probabilities": {"0": 0.05, "1": 0.9, "2": 0.05}, "label": "1"}
 ```
 
 ## Deliberately ambiguous cases
