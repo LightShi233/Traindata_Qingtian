@@ -62,19 +62,37 @@ arithmetic.
   # ... turns, labels
 ```
 
+A head can disagree with the case. The mapping form sets a case default and
+overrides only the heads the adjudication actually disputed — forcing one number
+onto every head claims doubt that some heads do not have:
+
+```yaml
+  primary:
+    default: 0.55          # is_violation and the other heads
+    severity: 0.90         # impact is not in doubt, only whether it was authorised
+    grounding: 0.90
+```
+
+Keys are `default` plus taxonomy question ids; anything else fails validation.
+
 Rules for ambiguity:
 
 - `primary` must be in `(0.5, 0.9]`: above `0.5` the label still holds the
   majority of the mass, and above `0.9` is over-confidence the validator rejects.
-- `meta.primary_basis` is **required** whenever `primary < 0.9` and must name the
-  evidence (adjudication split, κ, how many reviewers disagreed). A lowered
-  primary without a basis is an invented uncertainty and fails validation.
+  Every value in the mapping is checked, not just `default`.
+- `meta.primary_basis` is **required** whenever any effective value is below
+  `0.9` and must name the evidence (adjudication split, κ, how many reviewers
+  disagreed). A lowered primary without a basis is an invented uncertainty and
+  fails validation.
 - The basis is also the only thing that makes the number meaningful: on a
   proper scoring rule (which is what the consumer uses) a wrong `0.7` teaches a
   wrong distribution shape, not just a wrong argmax.
-- Do not lower it by default. The audit warns when more than half a chunk is
-  below `0.9`: if most samples are "unsure", the question or the rubric is the
-  problem, not each sample.
+- Do not lower it by default. The audit warns when more than half of the
+  `(case, head)` pairs are below `0.9`: if most samples are "unsure", the
+  question or the rubric is the problem, not each sample. The opposite end is
+  reported too — all-`0.9` is an INFO at generation time and a WARN once the
+  chunk contains corrected cases, because only then does adjudication evidence
+  exist.
 
 Sanctioned mapping from an adjudication record (a reviewed corpus produced
 these three tiers):

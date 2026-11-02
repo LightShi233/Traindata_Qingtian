@@ -909,33 +909,63 @@ def check_action_surface(parsed, audit, args):
                 f"{med['unsafe']:.0f} 字符（{ratio:.2f}×）；再拉大就会被当成捷径")
 
 
-def check_primary_spread(parsed, audit):
-    """A corpus where every case is 90% sure carries no uncertainty at all.
+def check_primary_spread(parsed, audit, args):
+    """Watch both degenerate ends of the confidence scale.
 
     The default primary is a template prior. Lowering it is how a case says the
     evidence itself is contested, and that is what a proper scoring rule can
     learn from; a corpus that lowers it everywhere is the same degeneracy as
-    never lowering it. The schema gate requires ``meta.primary_basis`` for any
-    lowered value, so this check only watches the aggregate.
+    never lowering it.
+
+    The two ends are not symmetrical. Over-lowering is always a failure signal:
+    if most samples "can't decide", the question or the rubric is the problem.
+    Never lowering is only a signal when a correction pass already produced
+    adjudication evidence — at generation time the model has nothing to base a
+    lower value on, and warning there would reward inventing uncertainty. In
+    that case it is reported (INFO) and belongs in the data card instead.
     """
-    values = [float(c.get("primary", 0.9)) for _, c, _ in parsed
-              if isinstance(c.get("primary", 0.9), (int, float))
-              and not isinstance(c.get("primary", 0.9), bool)]
+    if not args.taxonomy:
+        return
+    qids = list(args.taxonomy.get("questions", {}))
+    values = []
+    for _, case, _meta in parsed:
+        raw = case.get("primary", 0.9)
+        if isinstance(raw, dict):
+            for qid in qids:
+                value = raw.get(qid, raw.get("default", 0.9))
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    values.append(float(value))
+        elif isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            values.extend([float(raw)] * len(qids))
     if not values:
         return
+
     lowered = [v for v in values if v < 0.9]
+    share = len(lowered) / len(values)
     audit.metrics["primary"] = {
         "min": min(values),
         "median": statistics.median(values),
         "max": max(values),
-        "lowered_share": len(lowered) / len(values),
+        "lowered_share": share,
+        "values": len(values),
     }
-    if len(lowered) / len(values) > 0.5:
+    corrected = sum(1 for _, c, _ in parsed
+                    if isinstance(c.get("meta"), dict) and c["meta"].get("corrects"))
+    if share > 0.5:
         audit.warn(
             "primary",
-            f"{len(lowered)}/{len(values)} 个 case 把 primary 降到 0.9 以下；"
+            f"{len(lowered)}/{len(values)} 个 (case,head) 把 primary 降到 0.9 以下；"
             "如果绝大多数样本都“说不准”，问题在题目本身或判据，而不是每个样本都歧义。"
             "把降置信度留给真正有仲裁分歧的样本")
+    elif not lowered:
+        message = ("全部 (case,head) 都用默认 0.9：没有样本表达不确定性。在 proper "
+                   "scoring rule 下这会训练出“所有样本同等自信”，而温度缩放补不回"
+                   "样本间差异；有仲裁记录时应按证据设置 primary")
+        if corrected:
+            audit.warn("primary", message + f"（本 chunk 有 {corrected} 条修正样本，"
+                                            "它们正是有仲裁证据的那批）")
+        else:
+            audit.info("primary", message + "（生成阶段没有裁决证据，记入数据卡即可）")
 
 
 def check_benign_directives(parsed, audit):
@@ -1388,7 +1418,7 @@ def main():
         check_salt_leakage(parsed, audit)
         check_action_attribution(parsed, audit, args)
         check_action_surface(parsed, audit, args)
-        check_primary_spread(parsed, audit)
+        check_primary_spread(parsed, audit, args)
         check_prefix_diversity(parsed, audit, args)
         check_text_style(parsed, audit, args)
         check_taxonomy(taxonomy, audit)

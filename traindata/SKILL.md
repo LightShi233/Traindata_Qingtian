@@ -441,7 +441,8 @@ read it before your first `write`. The hard rules below still apply.
    (`1.0` there, `0.0` everywhere else). Instead: primary `0.9`, remainder `0.1`
    spread evenly, always normalized. Ambiguity is expressed by lowering the
    primary below `0.9`, never by writing a hard 1.0. A case may set `primary`
-   (must be `> 0.5` and `<= 0.9`) when an adjudication record shows real
+   (a number, or a mapping with `default` plus per-head overrides; every value
+   must be `> 0.5` and `<= 0.9`) when an adjudication record shows real
    disagreement, and must then carry `meta.primary_basis` naming the evidence.
    Do not lower it by default: the consumer trains on the distribution with a
    proper scoring rule, so a corpus of constant `0.9` teaches uniform

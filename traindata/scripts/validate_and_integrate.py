@@ -511,18 +511,60 @@ def check_case(case, where, args, state):
     # above 0.5 so the label still holds a majority of the mass (renormalisation
     # spreads the rest evenly), and it must name where the uncertainty came from,
     # because a soft label that is soft for no recorded reason is noise.
-    if "primary" in case:
-        p = case["primary"]
-        if not isinstance(p, (int, float)) or isinstance(p, bool) or not (0.5 < p <= 0.9):
-            errs.append(f"{where}: primary 必须是 (0.5, 0.9] 的数字，实际 {p!r}；"
+    errs = check_primary(case, args, errs, where)
+    return errs
+
+
+def case_primary(case, qid=None):
+    """Effective primary for one head of a case.
+
+    ``primary`` is either a number (every head) or a mapping with an optional
+    ``default`` and per-head overrides. Per-head matters after an adjudication:
+    a case can be genuinely unsure about ``is_violation`` while its ``harm_kind``
+    is not in doubt, and forcing one number onto every head would claim doubt
+    that only some heads have.
+    """
+    p = case.get("primary", 0.9)
+    if isinstance(p, dict):
+        p = p.get(qid, p.get("default", 0.9)) if qid is not None else p.get("default", 0.9)
+    return float(p)
+
+
+def check_primary(case, args, errs, where):
+    """Validate the optional per-case / per-head confidence."""
+    if "primary" not in case:
+        return errs
+    raw = case["primary"]
+    if isinstance(raw, dict):
+        allowed = {"default"}
+        if args.taxonomy:
+            allowed |= set(args.taxonomy.get("questions", {}))
+        unknown = set(raw) - allowed
+        if unknown:
+            errs.append(f"{where}: primary 里有未知的 head {sorted(unknown)}；"
+                        f"只允许 default 和 taxonomy 的问题 id")
+        for key, value in raw.items():
+            if not isinstance(value, (int, float)) or isinstance(value, bool) \
+                    or not (0.5 < value <= 0.9):
+                errs.append(f"{where}: primary[{key!r}] 必须是 (0.5, 0.9] 的数字，"
+                            f"实际 {value!r}")
+        effective = [raw.get(qid, raw.get("default", 0.9))
+                     for qid in (args.taxonomy or {}).get("questions", {})] or list(raw.values())
+    else:
+        if not isinstance(raw, (int, float)) or isinstance(raw, bool) \
+                or not (0.5 < raw <= 0.9):
+            errs.append(f"{where}: primary 必须是 (0.5, 0.9] 的数字，实际 {raw!r}；"
                         "低于 0.5 主标签就不再占多数，高于 0.9 是过度自信")
-        elif p < 0.9:
-            meta = case.get("meta")
-            basis = meta.get("primary_basis") if isinstance(meta, dict) else None
-            if not isinstance(basis, str) or not basis.strip():
-                errs.append(f"{where}: primary={p} < 0.9 但没有 meta.primary_basis；"
-                            "降置信度必须写明依据（例如人工仲裁的分歧条数或 κ），"
-                            "否则等于随手编一个不确定性")
+            return errs
+        effective = [raw]
+    if any(isinstance(v, (int, float)) and not isinstance(v, bool) and v < 0.9
+           for v in effective):
+        meta = case.get("meta")
+        basis = meta.get("primary_basis") if isinstance(meta, dict) else None
+        if not isinstance(basis, str) or not basis.strip():
+            errs.append(f"{where}: primary < 0.9 但没有 meta.primary_basis；"
+                        "降置信度必须写明依据（例如人工仲裁的分歧条数或 κ），"
+                        "否则等于随手编一个不确定性")
     return errs
 
 
@@ -540,12 +582,13 @@ def expand_case(case, index, taxonomy):
     # 0.9 is the template prior. A case may lower it when the evidence is
     # genuinely contested (a recorded adjudication, see references/soft-labels.md);
     # the remainder is still spread evenly, so the label keeps the majority.
-    primary = float(case.get("primary", 0.9))
-    rest = 1.0 - primary
+    # A mapping form lowers only the heads the adjudication actually disputed.
     rows = []
     for qid, q in taxonomy["questions"].items():
         qt = q["type"]
         crit = q["criteria"]
+        primary = case_primary(case, qid)
+        rest = 1.0 - primary
         if qt == "noul":
             pos = bool(case.get("safe") is False or case.get(qid))
             probs = ({"true": primary, "false": rest} if pos
@@ -561,6 +604,12 @@ def expand_case(case, index, taxonomy):
             k = str(case[qid])
             probs = {kk: (primary if kk == k else rest / (len(keys) - 1)) for kk in keys}
             label = k
+        # Fail closed even if a caller skipped check_case: a lowered primary must
+        # never move the argmax off the label.
+        if label not in probs or probs[label] < max(probs.values()):
+            raise ValueError(
+                f"{case.get('traj_id')}/{qid}: primary={primary} 让 label {label!r} "
+                f"不再是 argmax；primary 必须在 (0.5, 0.9] 内")
         row = {
             "id": f"{case['traj_id']}/{qid}",
             "source_dataset": case.get("source_dataset", "synthetic"),

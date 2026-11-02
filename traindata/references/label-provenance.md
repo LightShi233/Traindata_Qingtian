@@ -153,6 +153,29 @@ work, because the error being learned is the spec's own error:
    the model still fails when the surface feature and the truth disagree. That
    needs a targeted probe set (surface-present, truth-absent), which is §5.
 
+   **Two measurements that keep a correction pass honest.** Both come from an
+   external study of this pipeline's output (2026-11-02); re-measure them, do
+   not quote them as constants:
+
+   - **Net gain is `N(2p − 1)`**, where `N` is the number of flips and `p` the
+     precision of the filter that proposed them (all-or-nothing flips: the `p`
+     fraction that were truly wrong gains, the rest loses). Measured `p` for the
+     audited recaller was 51/136 ≈ 37%, so bulk correction with that filter is
+     **negative**: `−0.26N`. The "program recalls, human decides" rule is
+     arithmetic, not taste — **require `p > 0.5` on a reviewed sample before
+     scaling a correction pass**, and never estimate `p` from the same cases
+     that motivated the filter.
+   - **The effect is a phase transition, not a learning curve.** Holding out
+     the corrected cases gives `follow_corrected` 48%, versus 94% when the same
+     cases are scored in-fold. As the corrected share grows, it stays flat at
+     ~34–43% up to ~6% coverage, then jumps to ~84–93% by ~9–12%. The corrected
+     cases share the probe's features (clean + egress/destructive verbs), so
+     flipping them in bulk drags a linear boundary across the whole region.
+     This is the **probe** being re-aimed, not evidence about the trained
+     model — but it does mean the corrected corpus remains surface-recoverable,
+     so a shortcut learner can still score well on it without learning why the
+     new labels are right. Do not read the far end as convergence.
+
 This does not eliminate the shortcut. It compresses the gap between the shortcut
 and the truth toward zero, which is why it does not conflict with the ban on
 claiming elimination in §5. It also does not replace the execution layer: a
@@ -270,7 +293,19 @@ reference `prepare_train_data.py`, not assumed:
   `grounding (score, 4)`. So dropping `mechanism` does **not** change
   `harm_kind`'s fitted population — different `k`, different bucket, they never
   shared one. The truly shared bucket is `severity` + `grounding`; refit it
-  after any change to either. If those heads become conditional on
-  `is_violation` (§6), add the condition to the bucket key: on clean cases
-  `severity` is constant 0, so merging the two conditional populations into one
-  temperature fits a degenerate half and inflates the variance of the estimate.
+  after any change to either.
+- **A conditional head needs a conditional bucket, and one branch must not be
+  fitted at all.** If `severity` is conditioned on `is_violation` (§6), the
+  clean branch is `severity ≡ 0` by this taxonomy's own definition ("none: no
+  impact") — variance zero, so a temperature fitted there has a zero
+  denominator. Split the buckets as `(score, true, 3)`: the violation branch
+  never takes level 0, so it is a 3-way fit — and `(score, false, 1)`: a
+  constant, published as `1.0` without fitting. Do not merge the two into one
+  `(score, 4)` bucket; that fits a degenerate half and inflates the estimate's
+  variance. The same applies to `grounding`, whose clean branch is almost
+  constant.
+- **Missing labels are not a special case.** A score head stored as `null`
+  (which an external audit reported 13 times) is not a valid level: the current
+  validator rejects it (`不是有效等级`), and `expand_case` would refuse to emit
+  an argmax over it. Those rows are legacy data from before that check and must
+  be excluded or corrected, not counted in a bucket.
