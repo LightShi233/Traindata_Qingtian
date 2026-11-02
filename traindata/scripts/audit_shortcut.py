@@ -233,6 +233,48 @@ def cv_scores(X, y, folds):
     return scores, accuracy, folds
 
 
+def load_corrected(path):
+    """traj_id -> the label this case carried *before* a human corrected it.
+
+    Accepts a JSON object ``{"<traj_id>": true|false}`` or JSONL rows with
+    ``traj_id`` and ``original_safe``. The map is what turns this probe into the
+    measurement that matters after a correction pass: does the surface model
+    still follow the old (wrong) label, or the corrected one?
+    """
+    with open(path, encoding="utf-8-sig") as fh:
+        text = fh.read()
+    out = {}
+    stripped = text.lstrip()
+    if stripped.startswith("{"):
+        doc = json.loads(stripped)
+        if "traj_id" in doc:  # a single row
+            out[str(doc["traj_id"])] = bool(doc["original_safe"])
+            return out
+        return {str(k): bool(v) for k, v in doc.items()}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        out[str(row["traj_id"])] = bool(row["original_safe"])
+    return out
+
+
+def follow_rates(labelled, oof, corrected):
+    """Agreement of the surface prediction with the old vs the corrected label."""
+    idx = {c.get("traj_id"): i for i, (_, c) in enumerate(labelled)}
+    pairs = [(tid, i) for tid, i in idx.items() if tid in corrected and not math.isnan(oof[i])]
+    if not pairs:
+        return None
+    old_hits = new_hits = 0
+    for tid, i in pairs:
+        pred = 1 if oof[i] >= 0.5 else 0
+        old = 0 if corrected[tid] else 1
+        old_hits += pred == old
+        new_hits += pred == (0 if labelled[i][1].get("safe") is True else 1)
+    n = len(pairs)
+    return {"cases": n, "follow_original": old_hits / n, "follow_corrected": new_hits / n}
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -245,6 +287,10 @@ def main():
                     help="合并 AUC 达到该值时以非 0 退出（默认 0 = 只报告）")
     ap.add_argument("--min-cases", type=int, default=40,
                     help="少于该样本数时不据阈值判失败（AUC 标准误太大）")
+    ap.add_argument("--corrected", default=None,
+                    help="修正集映射（JSON 对象或 JSONL：traj_id -> 修正前的 safe）。"
+                         "给出后额外报告探针对旧标签/新标签的跟随率——修正标签是切断"
+                         "偏差传递最便宜的手段（见 references/label-provenance.md）")
     args = ap.parse_args()
 
     deadline = Deadline(args.timeout)
@@ -303,6 +349,9 @@ def main():
         print(f"  {name:<18} {auc_v:6.3f}  {w[j]:+7.3f}{flag}")
     print(f"  {'combined':<18} {combined_auc:6.3f}  "
           f"{folds}-fold CV acc {cv:.3f} (majority baseline {baseline:.3f})")
+    discriminative = [n for n, a in per_feature.items() if abs(a - 0.5) >= 0.06]
+    print(f"  discriminative measured features: {len(discriminative)}/{len(FEATURE_ORDER)} "
+          f"(|AUC-0.5| >= 0.06) — a fixed, small feature set, not an exhaustive one")
 
     verdict = "OK"
     if verdict_auc >= 0.80:
@@ -318,17 +367,44 @@ def main():
     if len(y) < 30:
         print(f"  [note] 只有 {len(y)} 个 case，AUC 标准误很大；这个数只当方向看")
 
+    corrected_report = None
+    if args.corrected:
+        try:
+            corrected = load_corrected(args.corrected)
+        except (OSError, json.JSONDecodeError, KeyError) as exc:
+            print(f"FAIL: 修正集无法读取 {args.corrected}: {exc}")
+            return 2
+        rates = follow_rates(labelled, oof, corrected)
+        if rates is None:
+            print(f"corrected set: 0 个 case 能在语料里匹配到 "
+                  f"（{len(corrected)} 个 id）；映射的 key 必须是语料里的 traj_id")
+        else:
+            print(f"corrected set: {rates['cases']} cases")
+            print(f"  probe follows the ORIGINAL label:  {rates['follow_original']:.0%}")
+            print(f"  probe follows the CORRECTED label: {rates['follow_corrected']:.0%}")
+            if rates["follow_original"] > rates["follow_corrected"]:
+                print("  结论：在这批已修正样本上，表面探针仍然跟着旧标签走——"
+                      "偏差传递通道没有被切断，修正集还不够（见 label-provenance.md §4）")
+        corrected_report = rates
+
     report = {
         "cases": len(y),
         "unsafe": n_pos,
         "safe": n_neg,
         "per_feature_auc": per_feature,
+        "discriminative_measured_features": {
+            "count": len(discriminative), "of": len(FEATURE_ORDER),
+            "names": discriminative,
+            "note": "fixed feature set, not exhaustive; a low combined AUC only "
+                    "rules out these measured features",
+        },
         "coefficients_std": dict(zip(FEATURE_ORDER, w)),
         "combined_auc": combined_auc,
         "cv_accuracy": cv,
         "majority_baseline": baseline,
         "folds": folds,
         "verdict": verdict,
+        "corrected": corrected_report,
         "files": [os.path.basename(p) for p in paths],
     }
     if args.json:

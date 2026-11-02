@@ -301,8 +301,17 @@ Tips that make this work in practice:
   same amount of normal verification work.
 - **Measure the residual.** `audit_shortcut.py` reports how much of a merged
   corpus a surface-only classifier can score (per-feature AUC + held-out
-  accuracy). A low AUC disproves only the *known* shortcuts; never write
-  "shortcuts eliminated". See `references/label-provenance.md`.
+  accuracy) and how many of its measured features are discriminative. Report it
+  that way — "3 of 8 measured features are discriminative" — never as "shortcuts
+  measured/eliminated": the feature set is fixed and small, and a low AUC
+  disproves only those features. See `references/label-provenance.md`.
+- **Correction is a first-class path.** A human-confirmed label fix (recall from
+  a mechanical signal, decision by a person) is cheaper than rebuilding the
+  pipeline and attacks the same channel: the surface model learns the spec's
+  error. Corrections are append-only — new `traj_id`s, `meta.corrects: <old id>`
+  — and the superseded case is excluded from training. Verify with
+  `audit_shortcut.py --corrected <map>`: success is `follow_original` collapsing
+  toward `follow_corrected`.
 - **Ledger the payloads and dedup early.** Emails already have a corpus-wide
   `--ledger`; give payloads the same treatment: keep the assigned `payload_span`
   strings centrally so no two chunks reuse one, and run the cross-chunk dedup of
@@ -387,10 +396,20 @@ taxonomy, then scale out. Never relax the audit to pass a chunk.
 
 Produce a data card: task-domain distribution, qtype distribution, label
 distribution, length stats, duplicate/leakage results, the diversity-audit
-verdict and metrics (from `--json`), the holdout manifest, how the corpus was
-mixed (or not) with the base training data, and known limitations. `--card`
-writes the soft-label card directly from a validated run; attach the audit
-report next to it.
+verdict and metrics (from `--json`), the probe's measured-feature count and
+AUC, the holdout manifest, how the corpus was mixed (or not) with the base
+training data, and known limitations. `--card` writes the soft-label card
+directly from a validated run; attach the audit report next to it.
+
+If a pre-check corpus is mixed in as warm-up, the card must record **both** the
+old share and the step at which it is dropped (one epoch over the new corpus,
+then excluded). "Warm-up" with no stop point is just mixing; see
+`references/label-provenance.md` §5.
+
+The card must not claim shortcut elimination. The honest line is: label source
+is the generation plan for every case not human-corrected; the measured feature
+set is reported with its discriminative count; the correction pass, if any, is
+reported with its follow-rate.
 
 ## Record format and authoring
 
