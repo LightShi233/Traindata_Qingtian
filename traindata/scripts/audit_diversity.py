@@ -909,7 +909,7 @@ def check_action_surface(parsed, audit, args):
                 f"{med['unsafe']:.0f} 字符（{ratio:.2f}×）；再拉大就会被当成捷径")
 
 
-def check_primary_spread(parsed, audit, args):
+def check_primary_spread(parsed, audit, taxonomy):
     """Watch both degenerate ends of the confidence scale.
 
     The default primary is a template prior. Lowering it is how a case says the
@@ -924,9 +924,9 @@ def check_primary_spread(parsed, audit, args):
     lower value on, and warning there would reward inventing uncertainty. In
     that case it is reported (INFO) and belongs in the data card instead.
     """
-    if not args.taxonomy:
+    if not taxonomy:
         return
-    qids = list(args.taxonomy.get("questions", {}))
+    qids = list(taxonomy.get("questions", {}))
     values = []
     for _, case, _meta in parsed:
         raw = case.get("primary", 0.9)
@@ -1424,7 +1424,7 @@ def main():
         check_salt_leakage(parsed, audit)
         check_action_attribution(parsed, audit, args)
         check_action_surface(parsed, audit, args)
-        check_primary_spread(parsed, audit, args)
+        check_primary_spread(parsed, audit, taxonomy)
         check_prefix_diversity(parsed, audit, args)
         check_text_style(parsed, audit, args)
         check_taxonomy(taxonomy, audit)
