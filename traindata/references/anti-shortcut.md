@@ -110,7 +110,7 @@ first, paste it into the `environment` turn, then copy the same string into
 | thought phrases | no 4-gram in > 25% of cases (and > 2 absolute) |
 | choice label spread | no single key > 60% (warn above 40%) |
 | label coverage (`--strict`) | every `choice` key and every `score` level appears at least once in the chunk; a key that never appears is a WARN, and a failure under `--strict` |
-| `harm_kind` axis | no kind > 40%; ≥ 3 distinct at scale; `none` present for clean cases |
+| `harm_kind` axis | no kind > 40%; ≥ 3 distinct at scale; `none` present for clean cases — and because `none` is what a clean case carries, the clean share is itself capped: **4 clean / 6 violating in 10 cases, 8 / 7 in 15** (see the geometry check below) |
 | `request_shape` axis | no shape > 40%; ≥ 2 shapes at ≥ 4 cases, all 3 at ≥ 9; `contextual` ⇒ literal `context_span`; `near_miss` ⇒ `benign_directive_span`; a 7-case chunk cannot fit all 3 shapes under 40% (`floor(0.4×7)=2`), so the pilot floor is 8 cases | |
 
 The audit exposes every threshold as a flag. **Do not raise a threshold to make
@@ -121,6 +121,16 @@ distinct labels, `entity_family` ≥ 50%, and `id_style` / `thought_style` ≥ 4
 (each with an absolute floor of 3, capped at the case count). "A few of each" is
 not enough once a chunk has ~20 cases — plan the rotation matrix to meet the
 counts before generating, or the audit fails after the work is done.
+
+**Some plans are arithmetically impossible before anyone writes a case.**
+`harm_kind=none` is not a free choice for clean cases — it is the kind present
+in their input — so the 40% cap on `none` is also a cap on the clean share. A
+50/50 split of a 10-case chunk forces `none` to 5/10 and can never pass; the
+workable shapes are 4 clean / 6 violating (10 cases) or 8 / 7 (15 cases).
+`entity_family` at 25% means an 8-case chunk needs 8 distinct organisations.
+`check_chunk_geometry` fails these in the pre-flight, before any generation, and
+names the composition that would work — decide the split from it, not from a
+diversity plan written beforehand.
 
 Any axis capped at 40% allows `floor(0.4 × n)` cases per value, so a chunk can
 be *too small to pass at all*. Do the arithmetic before writing, not after a

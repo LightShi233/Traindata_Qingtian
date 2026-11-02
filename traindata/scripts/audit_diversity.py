@@ -428,6 +428,62 @@ def check_distribution(parsed, audit, args, key, label, max_share, min_distinct=
     return c, n
 
 
+# Above this many cases the 40% / 25% concentration caps stop being satisfiable
+# arithmetically, so a chunk that big was planned against the wrong thresholds.
+HARD_CHUNK_CEILING = 12
+
+
+def check_chunk_geometry(parsed, audit, args):
+    """Fail fast on a corpus where the concentration caps cannot be met.
+
+    Every axis capped at ``share`` allows ``floor(share * n)`` cases per value.
+    Two caps are structural, so a chunk beyond a certain size cannot satisfy
+    them no matter what the model writes:
+
+    - ``harm_kind``: a clean case carries ``none`` (that is the kind present in
+      its input), so ``none`` is at least the clean count. With ``safe=false``
+      capped at 50% and ``none`` capped at 40%, the workable shape is **8 clean
+      / 7 violating** in 15 cases or **4 clean / 6 violating** in 10; a 50/50
+      split of 10 needs ``none`` at exactly 5/10 = 50% and fails.
+    - ``entity_family``: capped at 25%, so an 8-case chunk needs 8 distinct
+      families; anything looser fails before the content is read.
+
+    The point of a pre-flight failure is that it arrives *before* the model
+    writes anything, instead of after five chunks have been authored: this is
+    what an arithmetically impossible plan looks like from the gate's side.
+    """
+    n = len(parsed)
+    if not n:
+        return
+    audit.metrics["chunk_size"] = n
+    if n > HARD_CHUNK_CEILING:
+        audit.fail("geometry", f"{n} 个 case 超过单 chunk 上限 {HARD_CHUNK_CEILING}；"
+                               "超过后 40%/25% 的集中度上限已不可能同时满足，"
+                               "请把 chunk 缩小或拆成两块")
+
+    clean = sum(1 for _, c, _ in parsed if c.get("safe") is True)
+    share = clean / n
+    if share > args.max_harm_kind_share:
+        cap = int(math.floor(args.max_harm_kind_share * n + 1e-9))
+        audit.fail("geometry",
+                   f"clean 有 {clean}/{n} 个（{share:.0%}），但每个 clean case 的 "
+                   f"harm_kind 都是 none，而 none 的占比上限是 "
+                   f"{args.max_harm_kind_share:.0%}；n={n} 时 clean 最多 {cap} 个。"
+                   f"按 40%/{'50%' if args.max_unsafe_share >= 0.5 else f'{args.max_unsafe_share:.0%}'}"
+                   f" 反推：10 个 case 应为 4 clean / 6 violating（或 15 个时 8/7）")
+
+    entity = Counter(m.get("entity_family") for _, _, m in parsed if m.get("entity_family"))
+    if entity:
+        cap = args.max_entity_share
+        top, count = entity.most_common(1)[0]
+        total = sum(entity.values())
+        if count / total > cap:
+            audit.fail("geometry",
+                       f"entity_family 每个值最多占 {cap:.0%}，{n} 个 case 需要 "
+                       f"{math.ceil(1 / cap)} 个不同组织；当前 '{audit.excerpt(str(top))}' "
+                       f"占 {count}/{total}")
+
+
 def check_diversity(parsed, audit, args):
     n = len(parsed)
     check_distribution(parsed, audit, args, "scenario_family", "场景骨架",
@@ -1416,6 +1472,7 @@ def main():
     try:
         parsed = check_meta(cases, audit, args)
         check_scenarios(parsed, audit, args)
+        check_chunk_geometry(parsed, audit, args)
         check_diversity(parsed, audit, args)
         check_harm_taxonomy(parsed, audit, args)
         check_payloads(parsed, audit, args)
