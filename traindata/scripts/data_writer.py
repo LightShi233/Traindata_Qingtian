@@ -1522,6 +1522,36 @@ def cmd_check(args):
         for stem, names in sorted(file_ids.items()):
             if stem not in allocated_any:
                 add("WARN", "unregistered", f"chunk 未被任何 round 登记（历史数据？）: {names}")
+        # Which taxonomy was each chunk authored against? A v2 chunk legitimately
+        # has 3 heads, so validating it against v3 fails for a contract reason,
+        # not a data defect. Report the mismatches so an integrate/split run does
+        # not silently mix versions (merge already refuses within a round).
+        version_of = {}
+        for entry in sorted(glob.glob(os.path.join(data_dir, "rounds", "*.json"))):
+            try:
+                with open(entry, encoding="utf-8-sig") as f:
+                    doc = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+            for allocation in doc.get("allocations", []):
+                version_of.setdefault(allocation.get("name"), doc.get("taxonomy_version"))
+        current = None
+        try:
+            with open(os.path.join(data_dir, "taxonomy.json"), encoding="utf-8-sig") as f:
+                current = json.load(f).get("version")
+        except (OSError, json.JSONDecodeError):
+            pass
+        if current:
+            chunk_names = {f"chunk_{stem}" for stem in file_ids}
+            stale = sorted((name, ver) for name, ver in version_of.items()
+                           if ver and ver != current and name in chunk_names)
+            if stale:
+                shown = ", ".join(f"{name}={ver}" for name, ver in stale[:8])
+                tail = " …" if len(stale) > 8 else ""
+                add("INFO", "taxonomy-version",
+                    f"{len(stale)} 个 chunk 属于其它 taxonomy 版本（当前 {current}）："
+                    f"{shown}{tail}。integrate/split 时按版本分组，不要混用；"
+                    "merge 已按轮次拒绝混版本")
 
     if args.strict:
         for finding in findings:

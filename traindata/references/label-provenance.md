@@ -162,9 +162,21 @@ work, because the error being learned is the spec's own error:
      fraction that were truly wrong gains, the rest loses). Measured `p` for the
      audited recaller was 51/136 ≈ 37%, so bulk correction with that filter is
      **negative**: `−0.26N`. The "program recalls, human decides" rule is
-     arithmetic, not taste — **require `p > 0.5` on a reviewed sample before
-     scaling a correction pass**, and never estimate `p` from the same cases
-     that motivated the filter.
+     arithmetic, not taste. But `p` is unknown and must be estimated, so the
+     threshold is the **95% Wilson lower bound of `p`, not the point estimate**:
+     `p̂ > 0.5` at n=50 still passes a filter whose true precision may be 50%.
+     Require `LB > 0.5` on a reviewed sample, and never estimate `p` from the
+     cases that motivated the filter:
+
+     | reviewed n | min true flips k | p̂ | Wilson LB |
+     | - | - | - | - |
+     | 20 | 15 | 0.75 | 0.531 |
+     | 30 | 21 | 0.70 | 0.521 |
+     | 50 | 32 | 0.64 | 0.501 |
+     | 200 | 114 | 0.57 | 0.501 |
+
+     The lower bound is what makes a small sample expensive: at n=20 the filter
+     must be right 15 times, at n=50 it must be right 32 times.
    - **The effect is a phase transition, not a learning curve.** Holding out
      the corrected cases gives `follow_corrected` 48%, versus 94% when the same
      cases are scored in-fold. As the corrected share grows, it stays flat at
@@ -181,6 +193,14 @@ and the truth toward zero, which is why it does not conflict with the ban on
 claiming elimination in §5. It also does not replace the execution layer: a
 corrected corpus is still labelled from the plan for every case a human did not
 touch.
+
+**Keep a floor of contested cases, or the three tiers degenerate.** If every
+case finishes at `0.90`, the `0.70` / `0.55` tiers exist in the schema and feed
+nothing. After a review pass, aim to retain **at least ~2% of the corpus at a
+lowered primary** — those are the only rows that teach the model that evidence
+can be ambiguous. This is a review-pass quota, not a generation gate: at
+generation time there is no adjudication to base a lower value on (see §3), so
+the audit reports the spread and warns only when corrections exist.
 
 **The uncertainty is already recoverable for these cases.** An adjudication
 record supplies a real difficulty tier, which is what a lowered primary is for:
@@ -259,6 +279,32 @@ the data. `prepare_train_data.py` writes one item per question and carries
 stays valid either way. Confirm which one the training loop does, because they
 are not equivalent in step count: filtering records shortens the epoch, while a
 zero weight keeps the step count and wastes the batch slot.
+
+**A missing head is a version boundary, not missing data.** Early chunks in the
+private corpus (`chunk_0001`, `chunk_0002`, `chunk_0004`) carry only 3 of the 5
+heads. Their round manifests say `taxonomy_version: ruhui-triage-v2` — the v2
+taxonomy had three questions, so those rows are complete for the contract they
+were authored against. They are not a generator defect, not random missing
+values, and not something to repair: validating them against v3 must fail, and
+`--require-complete-cases` failing there is correct. The consequences follow:
+
+- **Do not mix versions in one training corpus.** Under per-item averaging a
+  v2 case contributes 3 items instead of 5, so it is silently down-weighted to
+  60%; its rows also fall outside the v3 `(choice,7)` / `(score,4)` buckets.
+  `merge` already refuses a mixed round; `integrate`/`split` take globs and do
+  not, so select chunks by round version.
+- **`data_writer.py check` prints the mismatches** (`INFO [taxonomy-version]`,
+  non-failing) so a build run can see which chunks belong to another version
+  without opening the manifests.
+- **CI needs no exemption for history.** The workflow gates only the diff
+  (`git diff --base..HEAD -- 'chunks/chunk_*.jsonl'`); already-published v2
+  chunks are never re-validated against v3. The failure only appears if someone
+  points the v3 validator at a whole-root glob by hand.
+- **Rejection is whole-case, not per-head.** The validator errors the case and
+  `expand_case` raises on a missing question — it never emits the 3 good heads
+  and drops 2. That is deliberate: a half-labelled case is ambiguous (was the
+  head absent, or was it skipped?), and silently keeping the remaining items is
+  how a version mismatch becomes invisible.
 
 ## 7. What the downstream actually consumes (verified against ruhui)
 

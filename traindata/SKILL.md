@@ -386,7 +386,12 @@ taxonomy, then scale out. Never relax the audit to pass a chunk.
 
 1. Integrate accepted chunks into one file, re-running cross-chunk duplicate and
    leakage checks, then split into **training**, **calibration**, and **test**
-   sets. Split by **case**, never by record, so all questions of a case stay in
+   sets. Integrate **one taxonomy version at a time**: a v2 chunk carries 3
+   heads, so mixing it into a v3 corpus silently down-weights its cases and
+   falls outside the v3 temperature buckets. `merge` refuses a mixed round;
+   `integrate` takes a glob and does not — select chunks by the round's
+   `taxonomy_version` (`data_writer.py check` prints the mismatches as INFO).
+   Split by **case**, never by record, so all questions of a case stay in
    one split. `--split-dir` does this deterministically and writes
    `split_manifest.json`; then run the printed leakage command between splits.
    The test set must never be used for training or for tuning the **calibration

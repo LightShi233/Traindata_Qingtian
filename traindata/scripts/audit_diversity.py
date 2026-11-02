@@ -942,12 +942,18 @@ def check_primary_spread(parsed, audit, args):
 
     lowered = [v for v in values if v < 0.9]
     share = len(lowered) / len(values)
+    histogram = Counter(round(v, 3) for v in values)
     audit.metrics["primary"] = {
         "min": min(values),
         "median": statistics.median(values),
         "max": max(values),
         "lowered_share": share,
         "values": len(values),
+        # Descriptive, no threshold: a machine can read the confidence spread
+        # even when no gate fires, and an honest histogram cannot be prettified
+        # the way a threshold can be gamed.
+        "unique": len(histogram),
+        "histogram": {str(k): v for k, v in sorted(histogram.items())},
     }
     corrected = sum(1 for _, c, _ in parsed
                     if isinstance(c.get("meta"), dict) and c["meta"].get("corrects"))
