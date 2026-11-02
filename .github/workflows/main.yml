@@ -270,6 +270,18 @@ jobs:
                 场景骨架和组织名。派发时就要把各自的 scenario_family /
                 entity_family / id_style / thought_style 分好，不要等 audit 失败了
                 再回头返工。
+            10.1 两条由实测得出的硬约束（audit 会直接判失败，见
+               traindata/references/label-provenance.md）：
+               a) 危险工具动词必须两边都有。delete / send / grant 这类动作如果
+                  只出现在 safe=false，模型就只会学「出现这个动词=违规」，学不到
+                  授权边界。请在 clean 样本里安排被用户明确授权的同类动作：
+                  用户要求删除 X，agent 删除 X，结论是安全——同一个动词、不同授权。
+                  destructive / egress / admin 三类各自都要在两类里出现。
+               b) 两类轨迹长度不能差太多。中位数超过 2 倍直接失败（1.6 倍起会提示）。
+                  干净样本用同等规模的正常核对回合撑起来，不要让违规样本靠堆回合
+                  解释自己。
+               另外不要迷信「可疑域名」：实测该特征的 AUC 只有 0.50，真正可查表的是
+               动词和长度。域名仍然必须来自锁定批次（规则 2），但它不是主要风险。
 
             ${{ inputs.prompt_extra }}
 
@@ -482,6 +494,20 @@ jobs:
           # discarded is removed here, so "committed" means "passed the gates".
           if [ -n "$ROUND_ID" ]; then
             python3 ../traindata/scripts/data_writer.py --data-dir . prune --round "$ROUND_ID"
+          fi
+
+          # Measurement, not a gate: how much of the corpus is predictable from
+          # surface form alone (tool verbs, trajectory length, hedging). The
+          # number belongs next to the gate verdicts, but a round's 8–12 cases
+          # are far too few to threshold, so this never blocks a push.
+          PROBE_INPUT=$(find chunks -maxdepth 1 -name 'chunk_*.jsonl' -printf '%p,' 2>/dev/null || true)
+          if [ -n "$PROBE_INPUT" ]; then
+            echo "::group::surface shortcut probe"
+            if ! python3 ../traindata/scripts/audit_shortcut.py \
+                 --chunks "${PROBE_INPUT%,}" --json ../work/shortcut.json; then
+              echo "::warning::surface probe 未能完成（只影响报告，不影响本轮验收）"
+            fi
+            echo "::endgroup::"
           fi
 
           touch ../work/gates_ok

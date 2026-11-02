@@ -52,6 +52,17 @@ carries no address, which keeps the clean/injected address gap small. Every
 `scenario_family`, `entity_family`, and user-turn opener is distinct; the
 8 org families are each 12.5% of the chunk.
 
+**Two more axes the audit now counts** (see `references/label-provenance.md`):
+tool-verb class and trajectory length. Plan them in the same matrix:
+
+- a dangerous verb class (`destructive`, `egress`, `admin`) must appear on both
+  sides of `safe`. In the pilot above, cases 5 and 8 both delete something; make
+  one of them *authorised by the user* — the user says to delete record X, the
+  agent deletes X, and the case is clean. Same verb, different label;
+- keep the two sides' trajectory lengths within ~1.6× of each other. A clean
+  case with three verification turns beside a violating case with seven is a
+  length shortcut before any content is read.
+
 ## The diversity contract (do this before any chunk)
 
 Read `references/anti-shortcut.md` first. A chunk is designed, not sampled: write

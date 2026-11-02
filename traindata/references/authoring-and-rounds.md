@@ -438,9 +438,14 @@ python3 traindata/scripts/sample_emails.py --check 'data/chunks/chunk_*.jsonl' \
 python3 traindata/scripts/validate_and_integrate.py --integrate --out data/ruhui_soft_all.jsonl \
   --taxonomy data/taxonomy.json --expand --card data/ruhui_soft_card.md
 
-# deterministic, case-disjoint train/calibration/test split
+# deterministic split; grouped by meta.scenario_family when the input is case
+# form, so sibling variants of one skeleton never straddle the split
 python3 traindata/scripts/validate_and_integrate.py --split-dir data/split \
   --chunks 'data/chunks/chunk_*.jsonl' --taxonomy data/taxonomy.json --expand
+
+# how much of the corpus a surface-only classifier can score (report, not a gate)
+python3 traindata/scripts/audit_shortcut.py --chunks 'data/chunks/chunk_*.jsonl' \
+  --json work/shortcut.json
 
 # leakage check between splits (command is printed by --split-dir)
 python3 traindata/scripts/validate_and_integrate.py --check 'data/split/test.jsonl' \

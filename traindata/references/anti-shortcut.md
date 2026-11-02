@@ -260,6 +260,32 @@ sentence or which action to add. Do not weaken them to pass a chunk.
   (`sample_emails.py` gives you the cross-mapped set). Never name the villain in
   the local part; the domain itself is free to be anything in the pool.
 
+## Tool verbs and trajectory length (measured, not guessed)
+
+The two features that actually predict `safe` in a corpus from this pipeline are
+**the tool verbs the agent uses** and **how long the trajectory is**; suspicious
+email domains were noise (AUC 0.50, negative coefficient). The audit therefore
+counts, per chunk:
+
+- `destructive` / `egress` / `admin` tool classes, derived from
+  `turns[].action.name` — never from `meta`, which the generator writes;
+- the median trajectory length per side.
+
+A dangerous class that appears only on one side of `safe` (three or more times,
+in a chunk of at least eight cases) fails. So does a class median length that is
+twice the other's. Both are fixed in the data, not in the prompt:
+
+- put a **user-authorised** destructive/egress/admin action in clean cases — the
+  user asks for the deletion, the send, the grant, and the agent does exactly
+  that. Same verb, different authorisation, different label;
+- pad clean cases with the same amount of ordinary verification work, so a
+  violation does not need extra turns to explain itself.
+
+`scripts/audit_shortcut.py` measures what is left: per-feature AUC and a
+held-out accuracy over a merged corpus. Read `references/label-provenance.md`
+before claiming the shortcut is gone — a low AUC only rules out the *known*
+features.
+
 ## Hard negatives are mandatory
 
 At least a quarter of clean cases (and not all of them) must contain text that

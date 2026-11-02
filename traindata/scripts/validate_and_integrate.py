@@ -159,7 +159,12 @@ def qid_of(rec_id):
 
 
 def new_state():
-    return {"hashes": {}, "ids": set(), "grams": [], "cases": [], "groups": {}}
+    # ``families`` maps traj_id -> meta.scenario_family when the input is case
+    # form. The split uses it to keep one scenario family in one split: variants
+    # of the same skeleton are the same scenario, and a random case split would
+    # put sibling variants on both sides (see references/label-provenance.md).
+    return {"hashes": {}, "ids": set(), "grams": [], "cases": [], "groups": {},
+            "families": {}}
 
 
 def check_turns(parsed, tag):
@@ -425,6 +430,11 @@ def check_case(case, where, args, state):
         errs.append(f"{where}: traj_id 重复: {tid}")
     else:
         state["ids"].add(tid)
+        meta = case.get("meta")
+        if isinstance(meta, dict):
+            fam = meta.get("scenario_family")
+            if isinstance(fam, str) and fam.strip():
+                state["families"][tid] = fam.strip()
     if not isinstance(case["safe"], bool):
         errs.append(f"{where}: safe 必须是 bool")
     turns = case["turns"]
@@ -688,42 +698,56 @@ def parse_ratios(text):
     return ratios
 
 
-def allocate(n, ratios):
-    """Integer split sizes, leaving at least one case per non-zero split when possible."""
-    sizes = [0, 0, 0]
-    active = [i for i, r in enumerate(ratios) if r > 0]
-    if n < len(active):
-        for i in active[:n]:
-            sizes[i] = 1
-        return sizes
-    remaining = n
-    for pos, i in enumerate(active):
-        if pos == len(active) - 1:
-            sizes[i] = remaining
-        else:
-            need = len(active) - pos - 1
-            k = int(round(n * ratios[i]))
-            sizes[i] = max(1, min(k, remaining - need))
-            remaining -= sizes[i]
-    return sizes
+def split_rows(rows, ratios, seed, families=None):
+    """Case-disjoint split that also keeps a scenario family in one split.
 
-
-def split_rows(rows, ratios, seed):
+    Two cases from the same ``scenario_family`` are sibling variants of one
+    skeleton: same tools, same organisations, same shape. Splitting by case puts
+    one variant in train and another in test, and the held-out score then
+    measures memorisation of the template instead of generalisation. When the
+    input is case form, ``families`` (traj_id -> family) is used as the grouping
+    key, so a whole family lands in one split. Record-form input carries no
+    meta, and falls back to case-level grouping with a printed note.
+    """
+    families = families or {}
     groups = defaultdict(list)
     for r in rows:
-        groups[case_key(r["id"])].append(r)
+        cid = case_key(r["id"])
+        groups[families.get(cid) or cid].append(r)
     keys = sorted(groups)
-    random.Random(seed).shuffle(keys)
-    sizes = allocate(len(keys), ratios)
-    assignment = {}
-    pos = 0
-    for name, size in zip(SPLIT_NAMES, sizes):
-        for key in keys[pos:pos + size]:
-            assignment[key] = name
-        pos += size
+    rng = random.Random(seed)
+    rng.shuffle(keys)
+
     out = defaultdict(list)
-    for r in rows:
-        out[assignment[case_key(r["id"])]].append(r)
+    remaining = {name: len(rows) * ratio for name, ratio in zip(SPLIT_NAMES, ratios)}
+
+    def take(name, key):
+        out[name].extend(groups[key])
+        remaining[name] -= len(groups[key])
+
+    # Seed each non-empty split with the smallest groups, so a single large
+    # family cannot become the entire test set.
+    seeded = []
+    smallest = sorted(keys, key=lambda k: (len(groups[k]), k))
+    for name, ratio in zip(SPLIT_NAMES, ratios):
+        if ratio <= 0 or not smallest:
+            continue
+        key = smallest.pop(0)
+        take(name, key)
+        seeded.append(key)
+    for key in keys:
+        if key in seeded:
+            continue
+        # Fill whichever split is furthest below its target share.
+        name = max(
+            (n for n, ratio in zip(SPLIT_NAMES, ratios) if ratio > 0),
+            key=lambda n: remaining[n] / max(1e-9, len(rows) * ratios[SPLIT_NAMES.index(n)]))
+        take(name, key)
+
+    assignment = {}
+    for name, group_rows in out.items():
+        for r in group_rows:
+            assignment[case_key(r["id"])] = name
     return {name: out.get(name, []) for name in SPLIT_NAMES}, assignment
 
 
@@ -846,12 +870,17 @@ def main():
 
     if args.split_dir:
         ratios = parse_ratios(args.split_ratios)
-        splits, assignment = split_rows(rows, ratios, args.seed)
+        families = state.get("families") or {}
+        splits, assignment = split_rows(rows, ratios, args.seed, families)
+        group_by = "scenario_family" if families else "case"
         os.makedirs(args.split_dir, exist_ok=True)
         manifest = {
             "seed": args.seed,
             "ratios": ratios,
             "taxonomy_version": taxonomy_version,
+            "group_by": group_by,
+            "groups": len({families.get(case_key(r["id"])) or case_key(r["id"])
+                           for r in rows}),
             "splits": {},
         }
         for name in SPLIT_NAMES:
@@ -874,7 +903,8 @@ def main():
                 seen[cid] = name
         atomic_write_text(os.path.join(args.split_dir, "split_manifest.json"),
                           json.dumps(manifest, indent=2, ensure_ascii=False))
-        print(f"split -> {args.split_dir} (seed={args.seed}, ratios={ratios})")
+        print(f"split -> {args.split_dir} (seed={args.seed}, ratios={ratios}, "
+              f"group_by={group_by}, {manifest['groups']} groups)")
         for name in SPLIT_NAMES:
             m = manifest["splits"][name]
             print(f"  {name}: {m['cases']} cases / {m['records']} records -> {m['file']}")

@@ -51,6 +51,7 @@ import json
 import math
 import os
 import re
+import statistics
 import sys
 from collections import Counter, defaultdict
 
@@ -718,6 +719,56 @@ DOMAIN_RATIONALE = re.compile(
 NEUTRALIZE_SENTENCE = ("The sender uses a temporary mailbox; noteworthy, but the business "
                        "action stays within scope.")
 
+# Coarse tool classes, derived from ``turns`` (never from ``meta``, which the
+# generator writes). A measured audit of this pipeline showed tool verbs were
+# the strongest surface predictor of the label, so the classes have to appear on
+# both sides of ``safe``. Deliberately small: the goal is cross-mapping, not a
+# tool ontology.
+TOOL_CLASSES = (
+    ("destructive", {
+        "delete", "deleted", "drop", "purge", "destroy", "wipe", "erase",
+        "remove", "truncate", "overwrite", "reset", "cancel", "revoke",
+        "deactivate"}),
+    ("egress", {
+        "send", "sent", "email", "mail", "post", "publish", "upload", "export",
+        "download", "share", "transfer", "forward", "webhook", "transmit"}),
+    ("admin", {
+        "grant", "permission", "permissions", "role", "roles", "privilege",
+        "privileges", "escalate", "admin", "administrator", "disable", "enable",
+        "override", "bypass", "sudo", "impersonate"}),
+)
+ACTION_NAME_RE = re.compile(r'"name"\s*:\s*"([^"]+)"')
+TOOL_WORD_RE = re.compile(r"[a-z]+")
+
+
+def turn_tool_name(turn):
+    """The tool name of an agent turn, whether stored as a dict or a JSON string."""
+    action = turn.get("action")
+    if isinstance(action, dict):
+        name = action.get("name")
+        return name if isinstance(name, str) else ""
+    if isinstance(action, str):
+        m = ACTION_NAME_RE.search(action)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def case_tool_classes(case):
+    """Every dangerous class exercised by the agent anywhere in the trajectory."""
+    classes = set()
+    for turn in case.get("turns") or []:
+        if not isinstance(turn, dict) or turn.get("role") != "agent":
+            continue
+        name = turn_tool_name(turn)
+        if not name:
+            continue
+        tokens = set(TOOL_WORD_RE.findall(name.lower()))
+        for cls, lexicon in TOOL_CLASSES:
+            if tokens & lexicon:
+                classes.add(cls)
+    return classes
+
 
 def check_action_attribution(parsed, audit, args):
     """Enforce: label follows the agent's ACTION, never the recipient's domain.
@@ -781,6 +832,81 @@ def check_action_attribution(parsed, audit, args):
                        f"{where}: 标注为违规，但 agent 的动作里没有执行注入目标 "
                        f"{span_emails[:2]}；说明 agent 其实抗住了，应标 safe=true")
     audit.metrics["neutralized_temp_mail"] = neutralized
+
+
+def check_action_surface(parsed, audit, args):
+    """Keep the two strongest surface features from becoming the label.
+
+    A measured audit of this pipeline's output found that the label was
+    predictable from surface form alone with AUC 0.82 — not from injected
+    payloads or suspicious domains (those were noise), but from **what the tool
+    verbs looked like** and **how long the trajectory was**. A model trained on
+    such a corpus learns "destructive-sounding and long = violation" without
+    ever learning the authorisation rule the case was built to teach.
+
+    Nothing here judges a single case. The checks are counting facts about the
+    chunk, and the fix is a data-design fix:
+
+    - a dangerous tool class (destructive / egress / admin) that appears only
+      on one side of ``safe`` is a lookup table, so require it on both sides;
+    - trajectories of one class being much longer than the other is the same
+      shortcut in another dress, so require comparable lengths.
+
+    ``audit_shortcut.py`` measures the residual separability of a merged
+    corpus; this check stops the two known contributors at chunk level.
+    """
+    n = len(parsed)
+    if n < 2:
+        return
+    side_counts = {cls: Counter() for cls, _ in TOOL_CLASSES}
+    lengths = {"safe": [], "unsafe": []}
+    for where, c, _m in parsed:
+        if not isinstance(c.get("safe"), bool):
+            continue
+        side = "unsafe" if c["safe"] is False else "safe"
+        lengths[side].append(len(json.dumps(c["turns"], ensure_ascii=False)))
+        for cls, _ in TOOL_CLASSES:
+            if cls in case_tool_classes(c):
+                side_counts[cls][side] += 1
+
+    for cls, _ in TOOL_CLASSES:
+        counts = side_counts[cls]
+        total = sum(counts.values())
+        if total < 3 or n < 8:
+            continue
+        if not counts.get("safe") or not counts.get("unsafe"):
+            missing = "safe=true" if not counts.get("safe") else "safe=false"
+            present = "safe=false" if missing == "safe=true" else "safe=true"
+            audit.fail(
+                "surface",
+                f"{cls} 类工具动作只出现在 {present}（{total} 次），{missing} 一次都没有。"
+                f"这是可查表的捷径：模型只学“出现 {cls} 动词=违规”，不学授权边界。"
+                f"请在 {missing} 的样本里安排被用户明确授权的同类动作"
+                f"（例如用户要求删除/发送/授权），动作相同、结论不同")
+    audit.metrics["tool_class_sides"] = {
+        cls: dict(c) for cls, c in side_counts.items()}
+
+    if n >= 8 and lengths["safe"] and lengths["unsafe"]:
+        med = {k: statistics.median(v) for k, v in lengths.items()}
+        lo, hi = sorted(med.values())
+        ratio = (hi / lo) if lo else float("inf")
+        audit.metrics["median_length"] = med
+        audit.metrics["length_ratio"] = ratio
+        if ratio >= 2.0:
+            audit.fail(
+                "surface",
+                f"两类轨迹长度差异过大：中位数 {med['safe']:.0f} vs "
+                f"{med['unsafe']:.0f} 字符（{ratio:.2f}×）。长度本身就是强特征，"
+                "模型会按长度猜标签。请把两类的回合数/内容量拉到同一量级："
+                "干净样本补足同规模的正常核对步骤，违规样本不要靠堆回合讲清")
+        elif ratio >= 1.6:
+            # INFO, not WARN: --strict turns WARN into a failure and 1.6–2.0 is
+            # common enough in hand-written data that failing there would block
+            # otherwise fine chunks.
+            audit.info(
+                "surface",
+                f"两类轨迹长度接近可分的临界：中位数 {med['safe']:.0f} vs "
+                f"{med['unsafe']:.0f} 字符（{ratio:.2f}×）；再拉大就会被当成捷径")
 
 
 def check_benign_directives(parsed, audit):
@@ -1232,6 +1358,7 @@ def main():
         check_benign_directives(parsed, audit)
         check_salt_leakage(parsed, audit)
         check_action_attribution(parsed, audit, args)
+        check_action_surface(parsed, audit, args)
         check_prefix_diversity(parsed, audit, args)
         check_text_style(parsed, audit, args)
         check_taxonomy(taxonomy, audit)

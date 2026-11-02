@@ -6,7 +6,7 @@ compatibility: Requires Python 3.9+ (standard library only; the YAML reader is b
 allowed-tools: Read Write Edit Glob Grep Bash(python3:*) Bash(python:*)
 metadata:
   author: ruhui-data
-  version: "1.3"
+  version: "1.4"
 ---
 
 # Generating soft-label training data
@@ -291,6 +291,18 @@ Tips that make this work in practice:
   subagent must STOP and say so — not invent replacements. The orchestrator
   compares the echo to the plan before it runs `write`; a mismatch means the
   chunk is re-dispatched, not merged.
+- **Dangerous tool classes must be cross-mapped.** `destructive` / `egress` /
+  `admin` verbs are read from the agent's actions, not from `meta`. A class that
+  appears on only one side of `safe` fails the audit: the model would learn the
+  verb instead of the authorisation. Fix it in the data — put a user-authorised
+  deletion / send / grant in clean cases.
+- **Trajectory length must not predict the label.** If one class's median
+  trajectory is twice the other's, the audit fails. Pad clean cases with the
+  same amount of normal verification work.
+- **Measure the residual.** `audit_shortcut.py` reports how much of a merged
+  corpus a surface-only classifier can score (per-feature AUC + held-out
+  accuracy). A low AUC disproves only the *known* shortcuts; never write
+  "shortcuts eliminated". See `references/label-provenance.md`.
 - **Ledger the payloads and dedup early.** Emails already have a corpus-wide
   `--ledger`; give payloads the same treatment: keep the assigned `payload_span`
   strings centrally so no two chunks reuse one, and run the cross-chunk dedup of
@@ -407,9 +419,16 @@ read it before your first `write`. The hard rules below still apply.
 3. **`label` must equal the argmax** of `probabilities`.
 4. **Validate, then audit, before you accumulate.** Unvalidated data is not data,
    and schema-valid data that teaches a shortcut is worse than none. Both
-   `validate_and_integrate.py` and `audit_diversity.py` must exit 0.
+   `validate_and_integrate.py` and `audit_diversity.py` must exit 0. The audit
+   also counts tool-verb classes and trajectory length, because those — not
+   email domains — are what actually predicted the label in a measured corpus:
+   cross-map the verbs and keep the two sides' lengths comparable, or the chunk
+   is rejected.
 5. **Test data is never training data.** Keep ID ranges, files, and the scenario
-   holdout disjoint.
+   holdout disjoint. `--split-dir` groups by `meta.scenario_family` when the
+   input is case form, so sibling variants of one skeleton cannot straddle the
+   split; record-form input degrades to case grouping and says so in the
+   manifest. Never split by record.
 6. **Addresses come only from `sample_emails.py`, and email domains are never
    blacklisted.** The generator must **run** `traindata/scripts/sample_emails.py`
    and use its output verbatim; it must **not** read, grep, or `cat`
@@ -538,6 +557,10 @@ generation prompt) → `references/authoring-and-rounds.md` (before your first
   shipped v2 taxonomy in words. Start here when a sentence does not parse.
 - `references/anti-shortcut.md` — the diversity contract, `meta` schema, shortcut
   fingerprints, entity cross-mapping, hard negatives, polarity fix, pilot mixing.
+- `references/label-provenance.md` — why the labels are prior rather than
+  posterior, which surface features actually predict the label (tool verbs and
+  length, not domains), what the skill now cross-maps, and what it explicitly
+  refuses to claim without an execution layer.
 - `references/harmbench-methodology.md` — HarmBench methodology (behavior
   taxonomy, pipeline, metrics) and the **salt** convention.
 - `references/soft-labels.md` — distribution rules, ambiguity, normalization, examples.
@@ -562,7 +585,10 @@ generation prompt) → `references/authoring-and-rounds.md` (before your first
 - `scripts/yaml_to_jsonl.py` — YAML → validated JSONL; fail-closed, atomic.
 - `scripts/dataloader.py` — shared tolerant loader (JSON/JSONL/YAML, `Deadline`).
 - `scripts/validate_and_integrate.py` — the validator/integrator, run in place.
-- `scripts/audit_diversity.py` — the anti-shortcut / diversity gate.
+- `scripts/audit_diversity.py` — the anti-shortcut / diversity gate, including the
+  tool-verb cross-map and trajectory-length checks.
+- `scripts/audit_shortcut.py` — the measured probe: surface-only AUC per feature,
+  held-out accuracy, and a verdict on whether the corpus is still a lookup table.
 - `scripts/sample_emails.py` — locked, tiered, cross-mapped batches + ledger.
 - `scripts/salt.py` — salt a prompt; verify the **host stamp**. `salt_harmbench.py`
   mirrors a HarmBench checkout as salted data.

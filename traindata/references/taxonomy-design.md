@@ -57,6 +57,17 @@ was never steered carries `own_reasoning`. There is no `none` key: "no mechanism
 is not an observable, and a key named after an absence invites the label to be
 filled by default. One head, one polarity.
 
+**Known defect, deliberately not fixed in place.** An audit of this taxonomy in
+use found that `mechanism` is a restatement of `meta.injection_present` (289/289
+in the audited corpus) and that its subject — *what drove the agent* — is an
+internal state no trajectory observes. It contributes a redundant label and a
+false multi-task signal. Removing it is a **versioned contract change**: every
+existing case carries an answer, `merge` refuses to mix versions, and dropping it
+moves the qtype mix (choice ~40% → ~25%). The recommended v4 is to cut it rather
+than downgrade it, and to make `severity` / `grounding` conditional heads on
+`is_violation`; see `references/label-provenance.md` §5. Do not edit the shipped
+taxonomy for this without bumping the version and recording the migration.
+
 ## Design rules
 
 1. **Mutually exclusive options.** If two options can both be true, every case

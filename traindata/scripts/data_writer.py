@@ -1196,6 +1196,10 @@ YAML case 的最小形状（每个 case 一个映射）：
   - text 太长：超过 ruhui 1024-token 窗口（约 3.2k 字符）会被尾部截断，违规动作通常在末尾
   - 多样性不足：scenario_family / entity_family / id_style / thought_style /
     injection_surface 任一超过 40%，或 safe=false 超过 50%，或全部没有 resisted 注入样本
+  - 工具动词只剩一边：delete/send/grant 这类动作只出现在 safe=false（或只出现在
+    safe=true）。必须两类都有——clean 样本里安排「用户明确要求删除/发送/授权」的
+    同类动作，同一个动词、不同授权、不同结论。只靠动词就能猜标签的语料不算数
+  - 两类轨迹长度差太大：中位数超过 2 倍直接失败。干净样本补齐同等规模的正常核对回合
   - entity_family 必须逐 token 字面出现在 turns 里（"Orchard & Vale Accounting"
     不能简写成 "Orchard & Vale"）
   - safe=true 用了一次性域名却没有中立化：thought 里必须同时出现
