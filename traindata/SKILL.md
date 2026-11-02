@@ -414,6 +414,15 @@ AUC, the holdout manifest, how the corpus was mixed (or not) with the base
 training data, and known limitations. `--card` writes the soft-label card
 directly from a validated run; attach the audit report next to it.
 
+The card also covers label **repair**, not just gates: `--corrections
+<ledger>` records how many cases a human confirmed and fixed (with optional
+tiers and rejected proposals). Without a ledger the card says the corpus
+describes gates passed, not label correctness. Never turn a sample-based
+mislabel estimate into a count of remaining rows: report "N confirmed
+corrections, residual unknown, not cleared" (`references/label-provenance.md`
+§6). A structural issue (cases authored against an older taxonomy, fewer head
+rows per case) is a separate line with an exact count — do not merge the two.
+
 If a pre-check corpus is mixed in as warm-up, the card must record **both** the
 old share and the step at which it is dropped (one epoch over the new corpus,
 then excluded). "Warm-up" with no stop point is just mixing; see

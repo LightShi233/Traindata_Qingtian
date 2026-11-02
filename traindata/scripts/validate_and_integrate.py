@@ -707,6 +707,13 @@ def _shape_summary(shape):
                      for qid, keys, ins, crit in shape)
 
 
+def _records_by_case(rows):
+    by_case = defaultdict(list)
+    for r in rows:
+        by_case[case_key(r["id"])].append(r)
+    return by_case
+
+
 def head_set_errors(rows):
     """Reject a corpus whose cases do not all carry the same head shape.
 
@@ -721,9 +728,7 @@ def head_set_errors(rows):
     the record — e.g. how the trainer interprets a head — is invisible here.
     Group integrations by ``taxonomy_version``; this check is the fallback.
     """
-    by_case = defaultdict(list)
-    for r in rows:
-        by_case[case_key(r["id"])].append(r)
+    by_case = _records_by_case(rows)
     shapes = Counter(case_shape(recs) for recs in by_case.values())
     shapes.pop((), None)
     if len(shapes) <= 1:
@@ -791,7 +796,38 @@ def print_summary(s, rows):
     print("source_dataset:", dict(Counter(r["source_dataset"] for r in rows)))
 
 
-def render_card(s, rows, source_desc, taxonomy_version, checks):
+def load_corrections(path):
+    """Load a correction ledger: confirmed vs rejected label fixes.
+
+    Tolerant like the rest of the loader: a JSON array, a single object, or
+    JSONL. A row needs ``traj_id``; ``status`` is ``confirmed`` (default) or
+    ``rejected``; ``tier`` is free-form and counted. The point is to carry
+    **confirmed** repairs and *not* pretend they are the whole error population.
+    """
+    with open(path, encoding="utf-8-sig") as fh:
+        text = fh.read()
+    stripped = text.lstrip()
+    if stripped.startswith("["):
+        rows = json.loads(stripped)
+    elif stripped.startswith("{"):
+        doc = json.loads(stripped)
+        rows = doc.get("corrections") if isinstance(doc.get("corrections"), list) else [doc]
+    else:
+        rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+    confirmed, rejected, tiers = 0, 0, Counter()
+    for row in rows:
+        if not isinstance(row, dict) or "traj_id" not in row:
+            continue
+        if str(row.get("status", "confirmed")).lower() == "rejected":
+            rejected += 1
+            continue
+        confirmed += 1
+        if row.get("tier"):
+            tiers[str(row["tier"])] += 1
+    return {"confirmed": confirmed, "rejected": rejected, "tiers": dict(tiers)}
+
+
+def render_card(s, rows, source_desc, taxonomy_version, checks, corrections=None):
     lines = [
         "# Soft-label data card",
         "",
@@ -815,6 +851,34 @@ def render_card(s, rows, source_desc, taxonomy_version, checks):
             lines.append(f"| `{label}` | {n} |")
         lines.append("")
     lines += ["## Checks", "", *[f"- {c}" for c in checks]]
+    shapes = Counter(case_shape(recs) for recs in _records_by_case(rows).values())
+    shapes.pop((), None)
+    lines += ["", "## Head shape", ""]
+    if len(shapes) == 1:
+        lines.append(f"- every case carries: `{_shape_summary(next(iter(shapes)))}`")
+        lines.append("- A corpus built from an older taxonomy shows fewer heads here. "
+                     "That is a version boundary, not missing data; it also means one case "
+                     "contributes fewer training rows than the current taxonomy implies.")
+    else:
+        lines.append(f"- **{len(shapes)} different head shapes** — this should have been "
+                     "rejected by `head_set_errors`; do not train on it.")
+    lines += ["", "## Label correction status", ""]
+    if corrections is None:
+        lines.append("- no correction ledger supplied. This card therefore describes "
+                     "**gates passed, not label correctness**: every case still carries the "
+                     "label the generation plan gave it.")
+    else:
+        tiers = corrections["tiers"]
+        detail = (" (" + ", ".join(f"{k} {v}" for k, v in sorted(tiers.items())) + ")"
+                  if tiers else "")
+        lines.append(f"- human-confirmed corrections: **{corrections['confirmed']}**{detail}")
+        if corrections["rejected"]:
+            lines.append(f"- rejected correction proposals: {corrections['rejected']} "
+                         "(not corrections, do not count them)")
+        lines.append("- **residual: unknown, not cleared.** A sample-based mislabel estimate "
+                     "is an estimate, not a count of remaining rows; do not subtract it from "
+                     "the confirmed number or restate the remainder as a count. Cases without "
+                     "a confirmed correction still carry the plan's label.")
     lines += ["", "## Calibration and base rate", "",
               "- This corpus is balanced by design: the audit caps `safe=false` at half, and "
               "chunks tend to sit exactly at 50/50. Do not read that ratio as a deployment prior.",
@@ -966,6 +1030,9 @@ def main():
     ap.add_argument("--split-ratios", default="0.8,0.1,0.1")
     ap.add_argument("--seed", type=int, default=13)
     ap.add_argument("--card", default=None, help="输出 Markdown data card 的路径")
+    ap.add_argument("--corrections", default=None,
+                    help="人工修正台账（JSON/JSONL：traj_id[, status=confirmed|rejected, tier]）。"
+                         "写进数据卡的是**已确认修正数**；剩余误标量未知，卡里不会把它写成 0")
     ap.add_argument("--timeout", type=float, default=0.0,
                     help="整次运行的墙钟上限（秒，0=不限）；超时以退出码 3 结束")
     args = ap.parse_args()
@@ -1084,7 +1151,15 @@ def main():
     print_summary(s, rows)
     if args.card:
         source_desc = ", ".join(inputs)
-        atomic_write_text(args.card, render_card(s, rows, source_desc, taxonomy_version, checks))
+        corrections = None
+        if args.corrections:
+            try:
+                corrections = load_corrections(args.corrections)
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"修正台账无法读取: {args.corrections}: {exc}")
+                sys.exit(2)
+        atomic_write_text(args.card, render_card(
+            s, rows, source_desc, taxonomy_version, checks, corrections))
         print(f"data card -> {args.card}")
 
 

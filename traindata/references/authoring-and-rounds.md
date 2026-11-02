@@ -434,9 +434,11 @@ python3 traindata/scripts/salt.py --check 'data/chunks/chunk_*.jsonl'
 python3 traindata/scripts/sample_emails.py --check 'data/chunks/chunk_*.jsonl' \
   --existing data/ruhui_soft_all.jsonl
 
-# integrate (expand cases) and write a data card
+# integrate (expand cases) and write a data card; --corrections records
+# human-confirmed fixes so the card states repair, not just gates passed
 python3 traindata/scripts/validate_and_integrate.py --integrate --out data/ruhui_soft_all.jsonl \
-  --taxonomy data/taxonomy.json --expand --card data/ruhui_soft_card.md
+  --taxonomy data/taxonomy.json --expand --card data/ruhui_soft_card.md \
+  --corrections work/corrections.jsonl
 
 # deterministic split; grouped by meta.scenario_family when the input is case
 # form, so sibling variants of one skeleton never straddle the split

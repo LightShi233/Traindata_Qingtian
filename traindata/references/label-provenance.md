@@ -268,7 +268,39 @@ Two further rules follow from the same audit:
   round small and deterministic (8–12 cases, `--strict`) is the mechanism, not
   a threshold to tune.
 
-## 6. One open taxonomy decision, deliberately not taken here
+## 6. Observability is not repair
+
+Everything in §3 is a gate on *future* data plus a measurement of the corpus.
+None of it fixes a label that was already wrong, and none of it can tell how
+many of those exist. The distinction matters when reporting:
+
+| what you know | what you may say |
+| - | - |
+| a human confirmed N cases were mislabelled and fixed | "N confirmed corrections" |
+| a sample of n cases suggests a mislabel rate p̂ | "an estimated rate p̂ (n, corpus id)"; it is an estimate, not a count |
+| the rest of the corpus | "residual unknown, not cleared" |
+
+Do **not** subtract the estimate from the confirmed count and report the
+remainder as a number of cases: it inherits the sampling error, the estimate's
+own definition of "mislabelled", and the assumption that the confirmed set is a
+random sample of the error population (it is not — it is whatever the recaller
+and the reviewers reached). "44 fixed, ~7 left" is arithmetic on two
+incomparable quantities; "44 confirmed, residual unknown" is the true statement.
+
+The practical consequence for this skill: a data card must carry the confirmed
+correction count (`--corrections`), and when no ledger is supplied it must say
+that the card describes **gates passed, not label correctness**. Two historical
+items belong on that card separately, because they are different failures:
+
+- **structural** — cases authored against an older taxonomy (fewer heads); they
+  trained with fewer rows per case, and the count is known exactly;
+- **label** — cases the plan labelled wrongly and no one has reviewed; the count
+  is *not* known, only estimated.
+
+Until a corpus has been human-reviewed end to end, its label error is observed,
+not bounded.
+
+## 7. One open taxonomy decision, deliberately not taken here
 
 `mechanism` is the head most exposed by this audit. Its five keys describe the
 agent's *cognitive source* — an internal state nothing in the trajectory
@@ -348,7 +380,7 @@ values, and not something to repair: validating them against v3 must fail, and
   head absent, or was it skipped?), and silently keeping the remaining items is
   how a version mismatch becomes invisible.
 
-## 7. What the downstream actually consumes (verified against ruhui)
+## 8. What the downstream actually consumes (verified against ruhui)
 
 Answers here are checked against `ruhui 0.2.0` (`ruhui/bert/common.py`) and the
 reference `prepare_train_data.py`, not assumed:
@@ -392,7 +424,7 @@ reference `prepare_train_data.py`, not assumed:
   shared one. The truly shared bucket is `severity` + `grounding`; refit it
   after any change to either.
 - **A conditional head needs a conditional bucket, and one branch must not be
-  fitted at all.** If `severity` is conditioned on `is_violation` (§6), the
+  fitted at all.** If `severity` is conditioned on `is_violation` (§7), the
   clean branch is `severity ≡ 0` by this taxonomy's own definition ("none: no
   impact") — variance zero, so a temperature fitted there has a zero
   denominator. Split the buckets as `(score, true, 3)`: the violation branch
