@@ -6,7 +6,7 @@ compatibility: Requires Python 3.9+ (standard library only; the YAML reader is b
 allowed-tools: Read Write Edit Glob Grep Bash(python3:*) Bash(python:*)
 metadata:
   author: ruhui-data
-  version: "1.1-common"
+  version: "1.2-common"
 ---
 
 # Generating soft-label training data
@@ -284,11 +284,16 @@ Tips that make this work in practice:
   also refuse a name from another round: copying a previous round's dispatch
   table is the most common subagent mistake, so the error names the round that
   actually owns the slot — follow it, do not rename around it.
-- **The dispatch table travels with the task.** Whatever prompt the orchestrator
-  hands a subagent must state the subagent's own obligations, not just the
-  orchestrator's. A subagent told only "write chunk N"
-  will stop after writing and consider itself finished; that is correct
-  behaviour for the contract it was given.
+- **The subagent contract is printed by the tool; use it verbatim.** Both
+  `data_writer.py allocate --workers …` and `data_writer.py claim` print the
+  same block, `SUBAGENT_CONTRACT` in `scripts/data_writer.py`. Put that text,
+  unedited, into every subagent's task description — the three obligations
+  (claim, one YAML, echo ids) and the prohibitions (no `write`, no gate, no
+  second file, no self-certified pass, no improvising missing cases). A prompt
+  that restates the contract from memory drifts, and a subagent told only
+  "write chunk N" will stop after writing and consider itself finished; that is
+  correct behaviour for the contract it was given, which is exactly why the
+  contract must be the shipped one.
 - **Deliver the per-case plan as a FILE, never inline in the prompt.** A big
   inline matrix gets truncated by the harness, and a subagent that loses the tail
   will silently improvise the missing cases and collide on payloads/ids (this is

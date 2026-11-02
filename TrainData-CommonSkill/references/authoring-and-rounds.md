@@ -215,9 +215,10 @@ What the tool enforces:
   audit rejects the whole round.
 - **Each subagent claims its slot before writing.** `allocate --workers a b c`
   prints a chunk→subagent table; a worker runs `data_writer.py claim --round
-  <id> --name <exact name> --worker <self>` first. The name carries the run
-  suffix (`chunk_0007_40840653996`) and must be copied verbatim — inventing
-  `chunk_0007.yaml` or dropping the suffix lands in someone else's slot. Without
+  <id> --name <exact name> --worker <self>` first. The name may carry a
+  `--suffix` token (`chunk_0007_batchA`) and must be copied verbatim —
+  inventing `chunk_0007.yaml` or dropping the suffix lands in someone else's
+  slot. Without
   the claim, two workers both "write their chunk" and the later YAML replaces
   the earlier one silently: no gate ever sees the lost work. `claim` refuses a
   second owner, and `write --worker` refuses to accept work on a slot claimed
@@ -233,15 +234,17 @@ What the tool enforces:
   instead of writing into a slot that this round's `check` will later call
   unregistered. Fix the name from the current round's table — never rename
   around the error.
-- **A subagent's contract is exactly three obligations.** Claim the slot, write
-  that one YAML, echo the authored `traj_id` / `payload_span` set. It must not
-  run `write` / `merge` / any gate / any git command, must not write a second
-  file, and its self-report is not a verdict — only the orchestrator's exit
-  codes are. When you hand a subagent its task, restate those three obligations
-  and the prohibitions in the task itself: a subagent given only "write chunk N"
-  is behaving correctly when it stops after writing, which is exactly how the
+- **The subagent contract ships with the tool — paste it, do not paraphrase.**
+  `allocate --workers …` and `claim` both print `SUBAGENT_CONTRACT` (defined in
+  `scripts/data_writer.py`): three obligations (claim the slot, write that one
+  YAML, echo the authored `traj_id` / `payload_span` set) and five prohibitions
+  (no `write`/`merge`/gate/git, no second file, no self-invented names, no
+  self-certified pass, no improvising cases you were not given). Put that
+  block, unedited, in every subagent's task. A subagent given only "write chunk
+  N" is behaving correctly when it stops after writing — that is how the
   4-subagent / 2-written round was lost. A refused claim or a harness-blocked
-  shell is reported verbatim, never worked around by renaming or swapping slots.
+  shell is reported verbatim, never worked around by renaming or swapping slots;
+  the orchestrator re-runs it.
 - **The orchestrator finishes every slot it opened.** After the subagents
   return, the orchestrator walks the dispatch table and `write`s + gates each
   slot itself, then confirms `rounds/<id>.json` has no `pending` allocation.

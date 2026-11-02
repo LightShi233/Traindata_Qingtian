@@ -65,6 +65,23 @@ The full contract — phases, hard rules, `meta` schema, soft-label rules,
 taxonomy design, and the anti-shortcut gate — is in `SKILL.md`, with details in
 `references/`. Read `SKILL.md` first.
 
+## Parallel authoring
+
+To split a round across subagents, pass unique labels to `allocate`:
+
+```bash
+python3 scripts/data_writer.py allocate --count 8 --workers a1 a2 a3 a4 b1 b2 b3 b4 \
+  --email-manifest work/emails.json --salted-prompt work/salted_prompt.txt
+```
+
+It prints a chunk→worker table and then **the subagent contract itself**
+(`SUBAGENT_CONTRACT` in `scripts/data_writer.py`). Paste that block unedited into
+each subagent's task; `data_writer.py claim` prints the same block when the
+worker claims its slot. The contract is fixed: three obligations (claim, write
+one YAML, echo the authored ids) and five prohibitions (no `write`/merge/gate/git,
+no second file, no invented names, no self-certified pass, no improvising cases).
+The orchestrator runs every `write` and every gate itself.
+
 ## Layout
 
 ```

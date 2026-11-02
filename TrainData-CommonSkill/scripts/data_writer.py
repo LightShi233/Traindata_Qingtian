@@ -85,6 +85,30 @@ CHUNK_STEM_RE = re.compile(r"^chunk_(\d{4,})(?:_([A-Za-z0-9]{1,32}))?$")
 # Parallel authoring is encouraged, but the main agent must validate every chunk
 # itself; beyond this the review queue, not generation, becomes the bottleneck.
 MAX_CONCURRENT_CHUNKS = 8
+
+
+# The subagent contract, in one place. It is printed by `allocate` (so the
+# orchestrator has it when dispatching), by `claim` (so the worker sees it
+# first), and by `brief`. A prompt that restates it from memory drifts; this is
+# the copy that ships with the tool.
+SUBAGENT_CONTRACT = """\
+子代理契约（写死，不可协商）——你的职责只有三件事：
+  1. 认领自己的槽位：data_writer.py claim --round <id> --name <名字> --worker <你的标签>
+  2. 只写自己那一个 YAML（8–12 个 case），写到分派表给的路径
+  3. 回显你写的 traj_id 与 payload_span，逐条、逐字
+
+你不得做（做了就是违规，不是"多做了点"）：
+  - 不得运行 write / merge / salvage / prune / 任何 gate / 任何 git 命令
+  - 不得写第二个文件（不写 jsonl、不写脚本、不改别人的 YAML）
+  - 不得自己起 chunk 名或省略后缀；名字逐字复制分派表
+  - 不得自述"已通过 / 已验证"——gate 的退出码只有主代理能看，你的自述不算证据
+  - 不得因为"看起来没问题"就补写分派表里没有的 case；缺失就停下并说明
+
+被拒绝时（claim 报错、shell 被拦截）：原样回报，不要改名、换槽位或重试别的写法。"""
+
+
+def print_subagent_contract():
+    print(SUBAGENT_CONTRACT)
 ROUND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 TEMP_RE = re.compile(r"(^\.tmp-|\.tmp$|\.bak$|\.orig$|\.rej$|~\$?$|\.swp$|\.pyc$|^\.DS_Store$|^__pycache__$)")
 # A .gitignore is allowed at the root: a corpus may live in its own
@@ -505,6 +529,9 @@ def cmd_allocate(args):
               "也不写第二个文件；它说「已通过」不算通过。")
         print(f"  主代理必须对这 {len(allocated)} 个槽位逐个执行 write + 两个 gate，"
               "即使某个子代理没回话；收尾前 rounds/<id>.json 里不能剩下 pending。")
+        print()
+        print("把下面这段原样放进每个子代理的任务描述（这就是它的契约）：")
+        print_subagent_contract()
     else:
         for allocation in allocated:
             print(f"  {allocation['name']}  yaml={_display(_abs(data_dir, allocation['yaml']))}"
@@ -1038,7 +1065,11 @@ BRIEF = """\
        一个 chunk 的全部 case 写进同一个 YAML；多分配的槽位保持 pending、不会被 merge。
        并行时用 --count <子代理数>，最多 8：每轮（round）的槽位总数硬上限 8，
        因为每个 chunk 都要由主代理 write 并跑两个 gate，再多就验证不过来。
-  1a. 并行时加 --workers a1 a2 b1 b2：输出会打印「chunk 名 → 子代理」分派表。
+  1a. 并行时加 --workers a1 a2 b1 b2：输出会打印「chunk 名 → 子代理」分派表，
+       以及一段现成的「子代理契约」。把那段原样放进每个子代理的任务描述：
+       子代理的职责只有三件事（claim / 写一个 YAML / 回显 id），
+       不得 write / 跑 gate / 写第二个文件 / 自述通过。
+       （`data_writer.py claim` 会再打印一遍同一段；以脚本打印的为准。）
        标签必须互不相同（脚本会拒绝重复标签和保留标签 main/orchestrator）：
        一个标签认领两个槽位时，它得在「自己的两个 chunk」里二选一，漏掉的静默丢失。
        子代理的职责只有三件，派任务时就把这三条写进它的任务描述：
@@ -1226,9 +1257,8 @@ def cmd_claim(args):
         save_round(data_dir, manifest)
     print(f"claimed {args.name} -> {args.worker}")
     print(f"  只写这一个文件: {_display(_abs(data_dir, allocation['yaml']))}")
-    print(f"  写完后由主代理执行 write --round {args.round} --name {args.name}")
-    print("  你的职责到此为止：不运行 write / gate，也不要写第二个文件。"
-          "结束后回显你写的 traj_id 与 payload_span。")
+    print()
+    print_subagent_contract()
     return 0
 
 
