@@ -564,7 +564,7 @@ def check_locked_emails(payload, manifest, name):
         return [f"{name}: 本轮没有登记邮箱批次。地址必须来自 "
                 "sample_emails.py --cross-map 的输出，并通过 "
                 "allocate --email-manifest 登记；禁止自己挑域名"]
-    used = {e.lower() for e in EMAIL_RE.findall(payload)}
+    used = {e.lower() for e in EMAIL_RE.findall(payload or "")}
     off = sorted(used - allowed)
     if off:
         return [f"{name}: {len(off)} 个地址不在锁定批次内（例：{off[:5]}）。"
@@ -1347,7 +1347,52 @@ YAML case 的最小形状（每个 case 一个映射）：
 
 需要完整规则时看：SKILL.md（契约）、references/anti-shortcut.md
 （meta 字段表与多样性预算）。读文档即可，不要读 scripts/ 的实现。
+需要精确阈值/禁用措辞时运行：data_writer.py contract
+（数值直接从 audit_diversity.py 的定义和默认值打印，不是文档里的抄本）。
 """ 
+
+
+def cmd_contract(args):
+    """Print the audit's actual contract: fields, thresholds, banned patterns.
+
+    The gate is the authority, so the numbers come from the gate's own
+    definitions (`audit_diversity.build_parser()` and its module constants), not
+    from a copy in the docs. A generator that needs an exact threshold runs this
+    instead of reading the implementation and reverse-engineering it.
+    """
+    parser = ad.build_parser()
+    defaults = vars(parser.parse_args([]))
+    print("=== 审计契约（数值直接取自 audit_diversity.py）===")
+    print()
+    print("META 每个 case 必填：", ", ".join(sorted(ad.META_REQUIRED)))
+    print("注入时额外必填：", ", ".join(sorted(ad.META_INJECTION)))
+    print("request_shape 取值：", ", ".join(sorted(ad.TAXONOMY_SHAPES)))
+    print()
+    print("阈值（--flag 默认值，任一超过即失败）：")
+    for key in sorted(defaults):
+        if key.startswith("max_") or key.startswith("min_"):
+            print(f"  {key:<32} {defaults[key]}")
+    print()
+    print("明确的硬约束（来自结构，不是 --flag）：")
+    print("  - harm_kind=none 的 case 数 ≤ floor(max_harm_kind_share × n)；"
+          "resist 了注入的 clean case 标输入类别，不算 none")
+    print(f"  - 单 chunk 上限 {ad.HARD_CHUNK_CEILING} 个 case"
+          "（超过后集中度上限已不可能同时满足）")
+    print("  - 规划建议（文档，不强制）：每 chunk 8–12 个 case；"
+          "7 个 case 排不开三个 request_shape")
+    print()
+    print("禁用措辞 / 指纹（命中即失败）：")
+    for label, value in (("HARD_BANNED", ad.HARD_BANNED),
+                         ("FINGERPRINT_PATTERNS", ad.FINGERPRINT_PATTERNS),
+                         ("INTENT_LOCALPART", ad.INTENT_LOCALPART),
+                         ("SALT_LEAK", ad.SALT_LEAK)):
+        for pattern in value:
+            print(f"  {label:<20} {pattern!r}")
+    print(f"  DUAL_POLARITY        {ad.DUAL_POLARITY.pattern!r}")
+    print()
+    print("地址：批次是白名单不是配额——可以用子集；用到的每个 pair 的两端必须"
+          "在同一 chunk 内分处 safe / unsafe 两类。")
+    return 0
 
 
 def cmd_brief(args):
@@ -1733,13 +1778,16 @@ def main():
     gate.add_argument("--timeout", type=float, default=300.0)
     gate.set_defaults(func=cmd_gate)
 
+    sub.add_parser("contract", help="打印审计的精确契约：meta 字段、阈值、禁用措辞").set_defaults(
+        func=cmd_contract)
+
     sub.add_parser("list-dirs", help="列出工作目录里可作为输出根目录的候选").set_defaults(
         func=cmd_list_dirs)
     sub.add_parser("brief", help="打印 agent 速查：流程、字段、常见拒绝原因").set_defaults(
         func=cmd_brief)
 
     args = parser.parse_args()
-    if args.command in ("list-dirs", "brief", "claim"):
+    if args.command in ("list-dirs", "brief", "claim", "contract"):
         return args.func(args)
     if not args.data_dir:
         raise SystemExit("没有可用的输出目录。请用 --data-dir 指定一个目录，"

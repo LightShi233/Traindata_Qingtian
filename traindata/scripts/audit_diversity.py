@@ -1424,7 +1424,13 @@ def write_holdout(parsed, args, audit):
     audit.metrics["holdout"] = manifest
 
 
-def main():
+def build_parser():
+    """The audit's CLI, exposed so other tools can print its actual defaults.
+
+    ``data_writer.py contract`` imports this instead of restating thresholds: a
+    generator that wants the exact number should ask the gate, not read its
+    source and not guess.
+    """
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--chunks", default="chunk_*.jsonl", help="case 形式 chunk 的 glob")
@@ -1482,7 +1488,11 @@ def main():
                          "在公开 CI 日志里跑私有语料时必须打开")
     ap.add_argument("--timeout", type=float, default=0.0,
                     help="整次审计的墙钟上限（秒，0=不限）；超时以退出码 3 结束")
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
 
     _RUN["deadline"] = Deadline(args.timeout)
     paths = sorted(glob.glob(args.chunks))

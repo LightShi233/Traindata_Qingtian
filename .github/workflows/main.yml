@@ -118,6 +118,8 @@ jobs:
             不要做的事（下面每条都会让本轮白跑）：
             - 不要读 traindata/scripts/ 下的实现源码，也不要加任何 .py 脚本：
               工具已现成，你只输出 YAML 并调用 data_writer.py。
+              想要精确阈值或禁用措辞时运行 data_writer.py contract，
+              它直接从审计代码打印数值，不需要你去读源码反推。
             - 不要改 .github/、traindata/、data/taxonomy.json；只在 ./data 内产出。
             - 不要执行任何 git 命令；推送与校验由 CI 完成。
             - 不要 grep/cat traindata/assets/email_library/，地址只能来自

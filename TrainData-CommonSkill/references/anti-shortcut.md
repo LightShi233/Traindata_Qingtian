@@ -201,8 +201,16 @@ to place one in a clean case and one in a violating case. Result: the same
 domain class shows up on both sides, so "throwaway domain ⇒ attack" and
 "corporate domain ⇒ safe" both die. The audit then checks the aggregate (known
 disposable share in safe vs unsafe within 30 points) and, if
-`--email-manifest` is passed, verifies every pair literally appears in both
+`--email-manifest` is passed, verifies the pairs **you used** appear in both
 contexts.
+
+The batch is a **whitelist, not a quota**: `--count` is how many addresses are
+available, not how many must be used. A chunk that needs six addresses may
+ignore the rest; unused entries are skipped by the pair check. One case may
+carry several addresses — the cross-map rule is about which class a domain
+appears in, not about one address per case. Resampling after `allocate` is a
+mistake: the round snapshot is what `write` verifies against, so a new batch
+belongs to a new round, not a new file.
 
 Use `--check` before accepting a chunk; when addresses are over-reused it prints
 `REGENERATE EMAIL YOURSELF` and exits non-zero.
